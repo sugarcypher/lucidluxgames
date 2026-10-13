@@ -28,6 +28,8 @@ h1 { display: inline-block; margin: 0; font-size: clamp(44px, 13vw, 76px); font-
 .play:active { transform: scale(0.98); }
 .install { margin-top: 18px; padding: 16px 18px; border-radius: 18px; border: 1px dashed var(--line); color: var(--soft); font-size: 15.5px; }
 .install b { color: var(--ink); }
+.soon-card { opacity: 0.72; }
+.badge { display: inline-block; vertical-align: middle; margin-left: 8px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--soft); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
 .soon { margin-top: 26px; color: var(--soft); font-size: 15px; text-align: center; }
 footer { margin-top: 40px; color: var(--soft); font-size: 13px; text-align: center; }
 footer a { color: var(--soft); }
@@ -68,11 +70,18 @@ footer a { color: var(--soft); }
     </div>
   </section>
 
+  <section class="game soon-card">
+    <img src="huemain-icon.png" alt="HueMain icon: a ring of every hue around a white centre">
+    <div>
+      <h2>HueMain <span class="badge">Coming soon</span></h2>
+      <p>A colour game from the same house. Not yet playable.</p>
+    </div>
+  </section>
+
   <div class="install">
     <b>Keep it on your phone.</b> Open the game, then on iPhone tap <b>Share</b> → <b>Add to Home Screen</b>; on Android tap the menu → <b>Install app</b>. It gets its own icon and plays without a signal.
   </div>
 
-  <p class="soon">More games coming soon.</p>
   <footer><a href="privacy.html">Privacy</a></footer>
 </main>
 </body>

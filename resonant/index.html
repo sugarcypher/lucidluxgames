@@ -124,6 +124,27 @@
   .overlay h2 em{font-style:normal;color:var(--cyan);text-shadow:0 0 14px var(--cyan-dim)}
   .overlay p{color:var(--mute);margin:0 0 16px;font-size:12px;max-width:300px}
   .overlay button{font:700 13px var(--display);letter-spacing:.14em;text-transform:uppercase;background:linear-gradient(180deg,#8ff7ff,#4fd6e6 60%,#2fb3c6);color:#03262b;border:0;border-radius:999px 6px 6px 999px;padding:11px 22px 11px 18px;cursor:pointer;box-shadow:var(--bevel),0 0 14px var(--cyan-dim)}
+  /* ---- the gate: rounds V–IX are the paid half; one plate, one sentence, one tap ---- */
+  .gate{position:absolute;inset:0;display:none;place-items:center;background:rgba(4,6,10,.92);backdrop-filter:blur(5px);z-index:6;padding:14px;overflow:auto}
+  .gate.show{display:grid}
+  .gate .pl{width:100%;max-width:300px;padding:16px 16px 14px;border-radius:16px 4px 4px 4px;background:var(--brush),var(--plate);box-shadow:var(--bevel);position:relative;text-align:left}
+  .gate .pl:before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;border-radius:16px 0 0 4px;background:var(--cyan);box-shadow:0 0 8px var(--cyan-dim)}
+  .gate h2{font:800 20px/1.1 var(--display);letter-spacing:.03em;text-transform:uppercase;margin:0 0 6px}
+  .gate h2 em{font-style:normal;color:var(--cyan)}
+  .gate p{margin:0 0 10px;font-size:12px;line-height:1.5;color:var(--mute)}
+  .gate p b{color:var(--fg);font-weight:600}
+  .gate .q{font-family:var(--display);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin:10px 0 6px;font-weight:600}
+  .gate .ages{display:flex;gap:6px;margin-bottom:12px}
+  .gate .ages button{flex:1;height:34px;white-space:nowrap;padding:0 4px;border:1px solid var(--edge);border-radius:999px 4px 4px 999px;background:linear-gradient(180deg,#0f1319,#090c10);color:var(--mute);font:600 11px var(--display);letter-spacing:.04em;cursor:pointer}
+  .gate .ages button[aria-pressed="true"]{border-color:var(--cyan);color:var(--cyan);box-shadow:0 0 8px var(--cyan-dim)}
+  .gate .pay{display:block;width:100%;height:44px;border:0;border-radius:999px 6px 6px 999px;background:linear-gradient(180deg,#8ff7ff,#4fd6e6 60%,#2fb3c6);color:#03262b;font:800 13px var(--display);letter-spacing:.1em;text-transform:uppercase;cursor:pointer;box-shadow:var(--bevel),0 0 14px var(--cyan-dim);text-decoration:none;display:grid;place-items:center}
+  .gate .pay[aria-disabled="true"]{opacity:.35;pointer-events:none}
+  .gate .row{display:flex;justify-content:space-between;gap:10px;margin-top:12px}
+  .gate .row button{background:none;border:0;color:var(--mute);font:600 10px var(--display);letter-spacing:.08em;text-transform:uppercase;cursor:pointer;padding:4px 0}
+  .gate .row button:hover{color:var(--cyan)}
+  .gate .msg{font-size:11px;color:var(--cyan);min-height:14px;margin-top:8px}
+  .gate .msg.bad{color:var(--red)}
+  .gate textarea{width:100%;box-sizing:border-box;height:64px;background:#080b0f;border:1px solid var(--edge);border-radius:4px;color:var(--fg);font:11px var(--mono);padding:6px;resize:none;margin-top:6px}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
   @media (min-height:900px){ .rb{height:56px} }
   @media (max-height:700px){ .rb{height:44px} .rb .l{display:none} .hud .name{font-size:15px} }
@@ -157,6 +178,18 @@
       <div class="toast" id="toast"></div>
       <div class="stick" id="stick" aria-label="Turn the solid"><div class="knob" id="knob"></div><div class="lbl">turn</div></div>
       <div class="overlay" id="overlay"><div><h2 id="ovTitle"></h2><p id="ovText"></p><button id="ovBtn">Continue</button></div></div>
+      <div class="gate" id="gate" role="dialog" aria-label="The paid half">
+        <div class="pl">
+          <h2>The <em>solids</em></h2>
+          <p>Rounds I–IV are free, always. Rounds V–IX are the paid half: fields, dispersion, the cube, the dual and the dodecahedron. <b>One key, every Lucid Lux game, every device.</b> Pay what you like above the floor, by card or in stablecoin.</p>
+          <div class="q">How old are you? (counted, never stored with you)</div>
+          <div class="ages" id="ages"><button data-age="u13" aria-pressed="false">Under 13</button><button data-age="13-17" aria-pressed="false">13 – 17</button><button data-age="18+" aria-pressed="false">18 +</button></div>
+          <a class="pay" id="payBtn" aria-disabled="true" href="#" rel="noopener">Get the key</a>
+          <div class="msg" id="gateMsg"></div>
+          <div id="keyBox" style="display:none"><textarea id="keyIn" placeholder="Paste your key" spellcheck="false"></textarea><button class="pay" id="keyGo" style="margin-top:6px;height:36px">Unlock</button></div>
+          <div class="row"><button id="haveKey">I have a key</button><button id="gateBack">Not now</button></div>
+        </div>
+      </div>
     </div>
 
     <nav class="rail" aria-label="Act">
@@ -302,7 +335,7 @@ let toastT=null;
 function say(m,hot){ S.log.unshift({t:S.t.toFixed(1),m}); if(S.log.length>10) S.log.length=10; $('tickMsg').textContent=m; $('tick').classList.toggle('hot',!!hot); $('log').innerHTML=S.log.map(l=>`<div><span class="t">${l.t}s</span> ${l.m}</div>`).join(''); }
 function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),1600); }
 
-function loadLevel(i){ const lv=LEVELS[i]; $('overlay').classList.remove('show'); if(lv.fold){ SOL=SOLIDS[lv.fold]; const f=SOL.faces[lv.coreFace]; FOLD_CORE={face:lv.coreFace,x:f.cen[0],y:f.cen[1],r:28}; S.cam={yaw:0.6,pitch:-0.45}; }
+function loadLevel(i){ if(locked(i)){ gateShow(); return; } const lv=LEVELS[i]; $('overlay').classList.remove('show'); if(lv.fold){ SOL=SOLIDS[lv.fold]; const f=SOL.faces[lv.coreFace]; FOLD_CORE={face:lv.coreFace,x:f.cen[0],y:f.cen[1],r:28}; S.cam={yaw:0.6,pitch:-0.45}; }
   lv.emit.forEach(em=>{ em._k=0; if(em.at){ const f=SOL.faces[em.face]; em.x=f.cen[0]+em.at[0]; em.y=f.cen[1]+em.at[1]; } });
   Object.assign(S,{lvl:i,pieces:[],ents:[],t:0,phase:'plan',core:100,budget:lv.budget,diss:0,fed:0,spawned:0,sel:null,fold:!!lv.fold,paused:false,log:[],role:lv.roles[0],shape:3}); seed=17+i*101;
   $('lvlName').innerHTML=`${lv.name}<small>round ${lv.num} of ${LEVELS.length}</small>`;
@@ -344,8 +377,30 @@ function hitPiece(e,p){ const pts=polyPts(p); let best=null;
   if(p.role==='damper'){ const paid=e.E*(1-DAMP_KEEP); e.E*=DAMP_KEEP; S.budget+=Math.round(paid*DAMP_PAY); setSpeed(e); e.bounces++; teach('damper'); }
   else { lose(e,REST[p.role]||0.92,'reflect'); teach('reflect'); } }
 function crossEdges(e,px,py){ for(let g=0;g<3;g++){ const d=edgeDists(e.face,e.x,e.y); let i=-1; d.forEach((v,k)=>{ if(v<0&&(i<0||v<d[i])) i=k; }); if(i<0) return; const edge=SOL.faces[e.face].edges[i]; const d0=Math.max(0,edgeDists(e.face,px,py)[i]); const t=d0/(d0-d[i]||1); const ex=px+(e.x-px)*t,ey=py+(e.y-py)*t; const o=xfer(edge,ex,ey,e.vx,e.vy); const rest=1-t; e.face=edge.to; e.x=o.x+o.vx*DT*rest; e.y=o.y+o.vy*DT*rest; e.vx=o.vx; e.vy=o.vy; px=o.x; py=o.y; teach(L().card||'fold'); } }
+// ---------- the key: rounds V–IX unlock with an Ed25519-signed token minted by the shop worker after a paid checkout ----------
+const SHOP={ pay:'', api:'', free:4 };   // pay: Stripe Payment Link; api: worker origin. Both empty = gate off (nothing enforced until the shop opens).
+const KEY={ tok:null, pub:null, ok:false, age:null };
+const b64u={ enc:b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''), dec:s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0)) };
+const gateOn=()=>!!(SHOP.pay&&SHOP.api)&&location.hostname==='lucidlux.fyi';
+const locked=i=>gateOn()&&i>=SHOP.free&&!KEY.ok;
+async function pubkey(){ if(KEY.pub) return KEY.pub; let raw=null; try{ raw=localStorage.getItem('ll_pub'); }catch(_){} if(!raw){ const r=await fetch(SHOP.api+'/pubkey'); raw=(await r.json()).pub; try{ localStorage.setItem('ll_pub',raw); }catch(_){} } KEY.pub=await crypto.subtle.importKey('raw',b64u.dec(raw),{name:'Ed25519'},true,['verify']); return KEY.pub; }
+async function verifyKey(tok){ try{ const [p,sig]=tok.trim().split('.'); if(!p||!sig) return false; const pk=await pubkey(); const ok=await crypto.subtle.verify({name:'Ed25519'},pk,b64u.dec(sig),new TextEncoder().encode(p)); if(!ok) return false; const body=JSON.parse(new TextDecoder().decode(b64u.dec(p))); return body.k==='lucidlux'; }catch(e){ return false; } }
+async function keyInit(){ if(!gateOn()){ KEY.ok=true; return; } try{ KEY.tok=localStorage.getItem('ll_key'); }catch(_){}
+  const cs=new URLSearchParams(location.search).get('cs');
+  if(cs){ history.replaceState(null,'',location.pathname); try{ const r=await fetch(SHOP.api+'/unlock?session='+encodeURIComponent(cs)); const j=await r.json(); if(j.token){ KEY.tok=j.token; try{ localStorage.setItem('ll_key',j.token); }catch(_){} } }catch(e){} }
+  if(KEY.tok) KEY.ok=await verifyKey(KEY.tok);
+  if(cs){ gateShow(); gateSay(KEY.ok?'Unlocked. Your key is below under "I have a key": copy it to use on another device.':'Payment seen but the key did not verify. Tap "I have a key" to paste one, or try again.',!KEY.ok); if(KEY.ok) setTimeout(()=>{ gateHide(); loadLevel(SHOP.free); },1800); } }
+function gateShow(){ $('gate').classList.add('show'); $('overlay').classList.remove('show'); $('payBtn').href=SHOP.pay||'#'; $('payBtn').setAttribute('aria-disabled',String(!KEY.age||KEY.age==='u13')); }
+function gateHide(){ $('gate').classList.remove('show'); }
+function gateSay(m,bad){ const el=$('gateMsg'); el.textContent=m; el.classList.toggle('bad',!!bad); }
+document.querySelectorAll('#ages button').forEach(b=>b.addEventListener('click',()=>{ KEY.age=b.dataset.age; document.querySelectorAll('#ages button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+  $('payBtn').setAttribute('aria-disabled',String(KEY.age==='u13')); gateSay(KEY.age==='u13'?'Ask an adult to get the key; it works on any phone once you paste it in.':'');
+  try{ fetch(SHOP.api+'/age',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({age:KEY.age})}); }catch(_){} }));
+$('haveKey').onclick=()=>{ const box=$('keyBox'); box.style.display=box.style.display==='none'?'block':'none'; if(KEY.tok) $('keyIn').value=KEY.tok; };
+$('keyGo').onclick=async()=>{ const t=$('keyIn').value.trim(); if(!t) return; KEY.ok=await verifyKey(t); if(KEY.ok){ KEY.tok=t; try{ localStorage.setItem('ll_key',t); }catch(_){} gateSay('Unlocked.'); setTimeout(()=>{ gateHide(); loadLevel(SHOP.free); },900); } else gateSay('That key did not verify.',true); };
+$('gateBack').onclick=()=>{ gateHide(); loadLevel(0); };
 function finish(won){ S.phase='done'; $('bStart').disabled=true; ui(); const ov=$('overlay'); ov.classList.add('show'); const last=S.lvl>=LEVELS.length-1;
-  if(won){ $('ovTitle').innerHTML=last?'The solid <em>held.</em>':'Core <em>held.</em>'; $('ovText').textContent=last?`Integrity ${S.core}. Nine rounds, nine parameters: reflection, restitution, permeability, folding, fields, dispersion, defect, duality, and why five.`:`Integrity ${S.core}. Next: ${LEVELS[S.lvl+1].name}.`; $('ovBtn').textContent=last?'Play again':'Next round'; $('ovBtn').onclick=()=>loadLevel(last?0:S.lvl+1); }
+  if(won){ $('ovTitle').innerHTML=last?'The solid <em>held.</em>':'Core <em>held.</em>'; $('ovText').textContent=last?`Integrity ${S.core}. Nine rounds, nine parameters: reflection, restitution, permeability, folding, fields, dispersion, defect, duality, and why five.`:`Integrity ${S.core}. Next: ${LEVELS[S.lvl+1].name}.`; $('ovBtn').textContent=last?'Play again':(locked(S.lvl+1)?'The solids →':'Next round'); $('ovBtn').onclick=()=>{ const n=last?0:S.lvl+1; locked(n)?gateShow():loadLevel(n); }; }
   else if(S.core>0){ const miss=L().objectives.filter(o=>!o.test(S)).map(o=>o.label).join(', '); $('ovTitle').innerHTML='Core held, <em>target missed.</em>'; $('ovText').textContent=`Integrity ${S.core}. Short on: ${miss}. Same seed, same stream: change the geometry.`; $('ovBtn').textContent='Retry with my pieces'; $('ovBtn').onclick=()=>{ const keep=S.pieces; loadLevel(S.lvl); S.pieces=keep; S.budget=L().budget-keep.reduce((s,p)=>s+COST[p.n],0); ui(); }; }
   else { $('ovTitle').innerHTML='Core <em>lost.</em>'; $('ovText').textContent=`Integrity ${S.core}. Same seed, same sparks: change the geometry.`; $('ovBtn').textContent='Retry with my pieces'; $('ovBtn').onclick=()=>{ const keep=S.pieces; loadLevel(S.lvl); S.pieces=keep; S.budget=L().budget-keep.reduce((s,p)=>s+COST[p.n],0); ui(); }; } }
 
@@ -480,7 +535,8 @@ function ui(){ $('mCore').textContent=S.core; const bar=$('coreBar'); bar.firstE
 let acc=0,last=performance.now();
 function frame(now){ requestAnimationFrame(frame); const el=Math.min(0.1,(now-last)/1000); last=now; stickTick(el); if(S.phase==='wave'&&!S.paused){ acc+=el; let n=0; while(acc>=DT&&n<8){step();acc-=DT;n++;} ui(); } draw(); }
 loadLevel(0); requestAnimationFrame(frame);
-window.__resonant={S,loadLevel,startWave,place,CORE,H:()=>H,SOLIDS,LEVELS,solid:()=>SOL};
+window.__resonant={S,loadLevel,startWave,place,CORE,H:()=>H,SOLIDS,LEVELS,solid:()=>SOL,SHOP,KEY,gateShow,verifyKey};
+keyInit();
 })();
 </script>
 

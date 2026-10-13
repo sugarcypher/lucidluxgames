@@ -1,0 +1,15 @@
+# Lucid Lux shop worker: mints game keys after a paid Stripe checkout, counts age brackets.
+# Deploy from the Mac:  cd worker && npx wrangler deploy
+name = "lucidlux-shop"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# Create once with:  npx wrangler kv namespace create AGES   → paste the id below
+[[kv_namespaces]]
+binding = "AGES"
+id = "REPLACE_WITH_KV_ID"
+
+# Secrets (never in this file). Set each with:  npx wrangler secret put <NAME>
+#   STRIPE_KEY  restricted key, Checkout Sessions: read   (Dashboard → Developers → API keys → Create restricted key)
+#   SIGN_KEY    Ed25519 private key from  node keygen.mjs
+#   ADMIN_KEY   any long random string; lets you read the age counts at GET /age?key=...
