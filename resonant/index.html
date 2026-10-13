@@ -9,7 +9,6 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Antonio:wght@400;700&family=Share+Tech+Mono&display=swap">
 <style>
   /* Identity: a machined instrument. Three sources, one object —
        metallurgy: brushed gunmetal plates, chamfered bevels, hairline highlights; nothing is flat paint
@@ -20,7 +19,7 @@
     --steel-hi:#343a43; --steel:#22272e; --steel-lo:#141820; --edge:#3b434d; --edge-lo:#0b0e13;
     --cyan:#6cf3ff; --cyan-dim:rgba(108,243,255,.35); --orange:#ff8a2a; --red:#ff5a3c;
     --spark:#ff8a2a; --seed:#7dffc9; --glass:#6cf3ff; --damp:#c39bff; --gate:#7dffc9; --prism:#ffd166; --core:#b8f4ff; --bad:#ff5a3c; --good:#6cf3ff; --amber:#6cf3ff;
-    --display:'Antonio','Oswald',Impact,sans-serif; --mono:'Share Tech Mono',Menlo,monospace; --rail:56px; color-scheme:dark;
+    --display:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',sans-serif; --mono:ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace; --rail:56px; color-scheme:dark;
     --brush:repeating-linear-gradient(180deg,rgba(255,255,255,.035) 0 1px,rgba(0,0,0,0) 1px 3px);
     --plate:linear-gradient(180deg,var(--steel-hi) 0%,var(--steel) 48%,var(--steel-lo) 100%);
     --bevel:inset 0 1px 0 rgba(255,255,255,.14),inset 0 -1px 0 rgba(0,0,0,.65),inset 1px 0 0 rgba(255,255,255,.05),inset -1px 0 0 rgba(0,0,0,.4),0 1px 2px rgba(0,0,0,.6);
@@ -28,19 +27,19 @@
   html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none}
   body{background:var(--bg) radial-gradient(ellipse at 50% 0%,#0b1119 0%,var(--bg) 60%);color:var(--fg);font:12px/1.4 var(--mono);-webkit-font-smoothing:antialiased;-webkit-user-select:none;user-select:none}
   .app{height:100%;display:grid;grid-template-rows:auto 1fr auto;max-width:560px;margin:0 auto;box-sizing:border-box;padding-inline:8px;padding-block:6px 4px;gap:6px}
-  .lbl,.l,.phase,.o,.core .t,.num span,.tick .more,.sheet .k,.stick .lbl{font-family:var(--display);text-transform:uppercase;letter-spacing:.12em}
+  .lbl,.l,.phase,.o,.core .t,.num span,.tick .more,.sheet .k,.stick .lbl{font-family:var(--display);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
 
   /* ---- top HUD: an LCARS elbow plate in brushed steel ---- */
   .hud{display:grid;gap:5px;min-width:0;padding:6px 8px 6px 12px;border-radius:16px 4px 4px 4px;background:var(--brush),var(--plate);box-shadow:var(--bevel);position:relative}
   .hud:before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;border-radius:16px 0 0 4px;background:var(--cyan);box-shadow:0 0 8px var(--cyan-dim)}
   .hud .r1{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
-  .hud .name{font:700 18px/1.1 var(--display);letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hud .name{font:800 17px/1.1 var(--display);letter-spacing:.03em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .hud .name small{font:400 11px var(--mono);color:var(--cyan);margin-left:8px;letter-spacing:.14em;text-transform:none}
   .hud .phase{font-size:11px;color:var(--mute);white-space:nowrap}
   .hud .phase b{color:var(--cyan);font-weight:700;text-shadow:0 0 8px var(--cyan-dim)}
   .obj{display:flex;gap:6px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;min-width:0}
   .obj::-webkit-scrollbar{display:none}
-  .o{display:inline-flex;align-items:center;gap:6px;padding:3px 9px 3px 3px;border:1px solid var(--edge);border-radius:999px 4px 4px 999px;font-size:10.5px;color:var(--mute);white-space:nowrap;background:linear-gradient(180deg,#0f1319,#090c10);box-shadow:inset 0 1px 0 rgba(255,255,255,.05);transition:border-color .3s,color .3s;font-variant-numeric:tabular-nums}
+  .o{display:inline-flex;align-items:center;gap:5px;padding:3px 7px 3px 3px;border:1px solid var(--edge);border-radius:999px 4px 4px 999px;font-size:9.5px;letter-spacing:.04em;color:var(--mute);white-space:nowrap;background:linear-gradient(180deg,#0f1319,#090c10);box-shadow:inset 0 1px 0 rgba(255,255,255,.05);transition:border-color .3s,color .3s;font-variant-numeric:tabular-nums}
   .o i{width:15px;height:15px;border-radius:50%;border:1px solid var(--faint);display:grid;place-items:center;font-size:9px;font-style:normal;color:transparent;transition:all .3s;flex:none;background:#0a0d11}
   .o.live{border-color:#3d4752;color:var(--fg)}
   .o.live i{border-color:var(--cyan);color:var(--cyan);box-shadow:0 0 6px var(--cyan-dim);animation:pulse 1.8s ease-in-out infinite}
@@ -49,7 +48,7 @@
   .o.fail{border-color:rgba(255,90,60,.6);color:var(--red)}
   .o.fail i{border-color:var(--red);color:var(--red);box-shadow:0 0 8px rgba(255,90,60,.4);animation:none}
   .o em{font-style:normal;color:var(--fg);font-family:var(--mono);letter-spacing:0}
-  .obj.n4 .o{padding:3px 6px 3px 3px;font-size:9.5px;gap:4px;letter-spacing:.06em} .obj.n4 .o i{width:13px;height:13px}
+  .obj.n4 .o{padding:3px 5px 3px 3px;font-size:9px;gap:4px;letter-spacing:.02em} .obj.n4 .o i{width:13px;height:13px}
   @keyframes pulse{0%,100%{box-shadow:0 0 4px rgba(108,243,255,.25)}50%{box-shadow:0 0 10px rgba(108,243,255,.7)}}
 
   /* ---- middle: rails of machined keys + arena ---- */
@@ -61,7 +60,7 @@
   .rb:after{content:'';position:absolute;top:8px;bottom:8px;left:0;width:3px;border-radius:0 2px 2px 0;background:currentColor;opacity:0;transition:opacity .15s}
   .rail:last-child .rb:after{left:auto;right:0;border-radius:2px 0 0 2px}
   .rb .g{font-size:19px;line-height:1;font-family:var(--mono);transition:text-shadow .15s}
-  .rb .l{font-size:9px;margin-top:3px}
+  .rb .l{font-size:8px;margin-top:3px;letter-spacing:.06em}
   .rb .c{position:absolute;top:3px;right:6px;font-size:9px;color:var(--faint)}
   .rail:last-child .rb .c{right:auto;left:6px}
   .rb:active{box-shadow:inset 0 2px 6px rgba(0,0,0,.7)}
@@ -98,7 +97,7 @@
   .bar:after{content:'';position:absolute;left:50%;top:-2px;bottom:-2px;width:2px;background:rgba(230,236,240,.5);z-index:2}
   .bar.bad i{background:linear-gradient(90deg,#b8481f,var(--orange));box-shadow:0 0 8px rgba(255,138,42,.5)}
   .num{text-align:right;font-variant-numeric:tabular-nums;padding:2px 8px;border-radius:4px 12px 12px 4px;background:#080b0f;box-shadow:inset 0 1px 2px rgba(0,0,0,.9);min-width:52px}
-  .num b{display:block;font:700 22px/1 var(--display);color:var(--fg);letter-spacing:.02em}
+  .num b{display:block;font:800 21px/1 var(--display);color:var(--fg);letter-spacing:-.01em;font-variant-numeric:tabular-nums}
   .num span{font-size:9px;color:var(--mute)}
   .tick{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--mute);min-width:0;cursor:pointer;padding:3px 0 0;border-top:1px solid rgba(0,0,0,.5);box-shadow:0 -1px 0 rgba(255,255,255,.05)}
   .tick .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none;box-shadow:inset 0 1px 1px rgba(0,0,0,.6)}
@@ -204,7 +203,7 @@ const REST={reflector:0.92, gate:0.92};
 const WALL_REST=0.6, DAMP_KEEP=0.45, DAMP_PAY=0.12, MIN_E=18, DRAG=0.12;
 const COL={spark:'#ff8a2a',seed:'#7dffc9',reflector:'#6cf3ff',damper:'#c39bff',gate:'#7dffc9',prism:'#ffd166',core:'#b8f4ff'};
 const PRISM_K=0.6;   // prism deviation per face: PRISM_K·√(60/E) radians, so cool packets bend more than hot ones
-const FONT='Share Tech Mono, Menlo, monospace';
+const FONT='ui-monospace, SF Mono, Menlo, Consolas, monospace';
 // metal fill for a polygon: brushed steel lit from above, one shared gradient per frame
 function steel(x0,y0,x1,y1){ const g=ctx.createLinearGradient(x0,y0,x1,y1); g.addColorStop(0,'#3a414b'); g.addColorStop(.5,'#1f242b'); g.addColorStop(1,'#12161c'); return g; }
 let seed=1; const rnd=()=>{ seed=(seed*1103515245+12345)&0x7fffffff; return seed/0x7fffffff; };
