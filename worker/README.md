@@ -18,7 +18,10 @@ Mints the game key after a paid Stripe checkout and counts age brackets. No acco
    npx wrangler secret put ADMIN_KEY            # any long random string
    npx wrangler deploy                          # prints https://lucidlux-shop.<account>.workers.dev
    ```
-7. **Turn the gate on.** In `resonant/index.html` set `SHOP.pay` to the Payment Link URL and `SHOP.api` to the worker URL (no trailing slash). Until both are set the gate is off and every round is free.
+7. **Turn the shop on.** In `/shop.js` set `SHOP.pay` to the Payment Link URL and `SHOP.api` to the worker URL (no trailing slash). That one file is loaded by every game and by `/key/`; until both are set everything is free and `/key/` says so.
+
+## Adding a game to the key
+Load `../shop.js`, copy the gate markup from `resonant/index.html` (the `.gate` block), call `LL.mount({gate, onUnlock, onBack})` and `LL.init()`, and check `LL.ok()` wherever the paid part begins. The same key unlocks it.
 
 ## Reading the age counts
 `https://lucidlux-shop.<account>.workers.dev/age?key=<ADMIN_KEY>` → `{"u13":n,"13-17":n,"18+":n}`

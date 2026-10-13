@@ -8,6 +8,7 @@
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
+<script src="../shop.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <style>
   /* Identity: a machined instrument. Three sources, one object —
@@ -183,11 +184,11 @@
           <h2>The <em>solids</em></h2>
           <p>Rounds I–IV are free, always. Rounds V–IX are the paid half: fields, dispersion, the cube, the dual and the dodecahedron. <b>One key, every Lucid Lux game, every device.</b> Pay what you like above the floor, by card or in stablecoin.</p>
           <div class="q">How old are you? (counted, never stored with you)</div>
-          <div class="ages" id="ages"><button data-age="u13" aria-pressed="false">Under 13</button><button data-age="13-17" aria-pressed="false">13 – 17</button><button data-age="18+" aria-pressed="false">18 +</button></div>
-          <a class="pay" id="payBtn" aria-disabled="true" href="#" rel="noopener">Get the key</a>
-          <div class="msg" id="gateMsg"></div>
-          <div id="keyBox" style="display:none"><textarea id="keyIn" placeholder="Paste your key" spellcheck="false"></textarea><button class="pay" id="keyGo" style="margin-top:6px;height:36px">Unlock</button></div>
-          <div class="row"><button id="haveKey">I have a key</button><button id="gateBack">Not now</button></div>
+          <div class="ages"><button data-age="u13" aria-pressed="false">Under 13</button><button data-age="13-17" aria-pressed="false">13 – 17</button><button data-age="18+" aria-pressed="false">18 +</button></div>
+          <a class="pay" data-pay aria-disabled="true" href="#" rel="noopener">Get the key</a>
+          <div class="msg"></div>
+          <div class="keybox" style="display:none"><textarea placeholder="Paste your key" spellcheck="false"></textarea><button class="pay" data-go style="margin-top:6px;height:36px">Unlock</button></div>
+          <div class="row"><button data-have>I have a key</button><button data-back>Not now</button></div>
         </div>
       </div>
     </div>
@@ -378,27 +379,11 @@ function hitPiece(e,p){ const pts=polyPts(p); let best=null;
   else { lose(e,REST[p.role]||0.92,'reflect'); teach('reflect'); } }
 function crossEdges(e,px,py){ for(let g=0;g<3;g++){ const d=edgeDists(e.face,e.x,e.y); let i=-1; d.forEach((v,k)=>{ if(v<0&&(i<0||v<d[i])) i=k; }); if(i<0) return; const edge=SOL.faces[e.face].edges[i]; const d0=Math.max(0,edgeDists(e.face,px,py)[i]); const t=d0/(d0-d[i]||1); const ex=px+(e.x-px)*t,ey=py+(e.y-py)*t; const o=xfer(edge,ex,ey,e.vx,e.vy); const rest=1-t; e.face=edge.to; e.x=o.x+o.vx*DT*rest; e.y=o.y+o.vy*DT*rest; e.vx=o.vx; e.vy=o.vy; px=o.x; py=o.y; teach(L().card||'fold'); } }
 // ---------- the key: rounds V–IX unlock with an Ed25519-signed token minted by the shop worker after a paid checkout ----------
-const SHOP={ pay:'', api:'', free:4 };   // pay: Stripe Payment Link; api: worker origin. Both empty = gate off (nothing enforced until the shop opens).
-const KEY={ tok:null, pub:null, ok:false, age:null };
-const b64u={ enc:b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''), dec:s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0)) };
-const gateOn=()=>!!(SHOP.pay&&SHOP.api)&&location.hostname==='lucidlux.fyi';
-const locked=i=>gateOn()&&i>=SHOP.free&&!KEY.ok;
-async function pubkey(){ if(KEY.pub) return KEY.pub; let raw=null; try{ raw=localStorage.getItem('ll_pub'); }catch(_){} if(!raw){ const r=await fetch(SHOP.api+'/pubkey'); raw=(await r.json()).pub; try{ localStorage.setItem('ll_pub',raw); }catch(_){} } KEY.pub=await crypto.subtle.importKey('raw',b64u.dec(raw),{name:'Ed25519'},true,['verify']); return KEY.pub; }
-async function verifyKey(tok){ try{ const [p,sig]=tok.trim().split('.'); if(!p||!sig) return false; const pk=await pubkey(); const ok=await crypto.subtle.verify({name:'Ed25519'},pk,b64u.dec(sig),new TextEncoder().encode(p)); if(!ok) return false; const body=JSON.parse(new TextDecoder().decode(b64u.dec(p))); return body.k==='lucidlux'; }catch(e){ return false; } }
-async function keyInit(){ if(!gateOn()){ KEY.ok=true; return; } try{ KEY.tok=localStorage.getItem('ll_key'); }catch(_){}
-  const cs=new URLSearchParams(location.search).get('cs');
-  if(cs){ history.replaceState(null,'',location.pathname); try{ const r=await fetch(SHOP.api+'/unlock?session='+encodeURIComponent(cs)); const j=await r.json(); if(j.token){ KEY.tok=j.token; try{ localStorage.setItem('ll_key',j.token); }catch(_){} } }catch(e){} }
-  if(KEY.tok) KEY.ok=await verifyKey(KEY.tok);
-  if(cs){ gateShow(); gateSay(KEY.ok?'Unlocked. Your key is below under "I have a key": copy it to use on another device.':'Payment seen but the key did not verify. Tap "I have a key" to paste one, or try again.',!KEY.ok); if(KEY.ok) setTimeout(()=>{ gateHide(); loadLevel(SHOP.free); },1800); } }
-function gateShow(){ $('gate').classList.add('show'); $('overlay').classList.remove('show'); $('payBtn').href=SHOP.pay||'#'; $('payBtn').setAttribute('aria-disabled',String(!KEY.age||KEY.age==='u13')); }
-function gateHide(){ $('gate').classList.remove('show'); }
-function gateSay(m,bad){ const el=$('gateMsg'); el.textContent=m; el.classList.toggle('bad',!!bad); }
-document.querySelectorAll('#ages button').forEach(b=>b.addEventListener('click',()=>{ KEY.age=b.dataset.age; document.querySelectorAll('#ages button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
-  $('payBtn').setAttribute('aria-disabled',String(KEY.age==='u13')); gateSay(KEY.age==='u13'?'Ask an adult to get the key; it works on any phone once you paste it in.':'');
-  try{ fetch(SHOP.api+'/age',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({age:KEY.age})}); }catch(_){} }));
-$('haveKey').onclick=()=>{ const box=$('keyBox'); box.style.display=box.style.display==='none'?'block':'none'; if(KEY.tok) $('keyIn').value=KEY.tok; };
-$('keyGo').onclick=async()=>{ const t=$('keyIn').value.trim(); if(!t) return; KEY.ok=await verifyKey(t); if(KEY.ok){ KEY.tok=t; try{ localStorage.setItem('ll_key',t); }catch(_){} gateSay('Unlocked.'); setTimeout(()=>{ gateHide(); loadLevel(SHOP.free); },900); } else gateSay('That key did not verify.',true); };
-$('gateBack').onclick=()=>{ gateHide(); loadLevel(0); };
+// ---------- the key: shared across every Lucid Lux game (see /shop.js). Rounds V–IX need it once the shop is on. ----------
+const FREE=4;
+const locked=i=>i>=FREE&&!LL.ok();
+LL.mount({ gate:$('gate'), onUnlock:()=>{ setTimeout(()=>{ LL.hide(); loadLevel(FREE); },900); }, onBack:()=>{ LL.hide(); loadLevel(0); }, onShow:()=>$('overlay').classList.remove('show') });
+const gateShow=()=>LL.show(); const verifyKey=t=>LL.verify(t);
 function finish(won){ S.phase='done'; $('bStart').disabled=true; ui(); const ov=$('overlay'); ov.classList.add('show'); const last=S.lvl>=LEVELS.length-1;
   if(won){ $('ovTitle').innerHTML=last?'The solid <em>held.</em>':'Core <em>held.</em>'; $('ovText').textContent=last?`Integrity ${S.core}. Nine rounds, nine parameters: reflection, restitution, permeability, folding, fields, dispersion, defect, duality, and why five.`:`Integrity ${S.core}. Next: ${LEVELS[S.lvl+1].name}.`; $('ovBtn').textContent=last?'Play again':(locked(S.lvl+1)?'The solids →':'Next round'); $('ovBtn').onclick=()=>{ const n=last?0:S.lvl+1; locked(n)?gateShow():loadLevel(n); }; }
   else if(S.core>0){ const miss=L().objectives.filter(o=>!o.test(S)).map(o=>o.label).join(', '); $('ovTitle').innerHTML='Core held, <em>target missed.</em>'; $('ovText').textContent=`Integrity ${S.core}. Short on: ${miss}. Same seed, same stream: change the geometry.`; $('ovBtn').textContent='Retry with my pieces'; $('ovBtn').onclick=()=>{ const keep=S.pieces; loadLevel(S.lvl); S.pieces=keep; S.budget=L().budget-keep.reduce((s,p)=>s+COST[p.n],0); ui(); }; }
@@ -535,8 +520,8 @@ function ui(){ $('mCore').textContent=S.core; const bar=$('coreBar'); bar.firstE
 let acc=0,last=performance.now();
 function frame(now){ requestAnimationFrame(frame); const el=Math.min(0.1,(now-last)/1000); last=now; stickTick(el); if(S.phase==='wave'&&!S.paused){ acc+=el; let n=0; while(acc>=DT&&n<8){step();acc-=DT;n++;} ui(); } draw(); }
 loadLevel(0); requestAnimationFrame(frame);
-window.__resonant={S,loadLevel,startWave,place,CORE,H:()=>H,SOLIDS,LEVELS,solid:()=>SOL,SHOP,KEY,gateShow,verifyKey};
-keyInit();
+window.__resonant={S,loadLevel,startWave,place,CORE,H:()=>H,SOLIDS,LEVELS,solid:()=>SOL,LL,gateShow,verifyKey};
+LL.init().then(()=>{ if(LL.justPaid&&LL.ok()){ LL.show(); LL.say('Unlocked. Your key is under "I have a key": copy it to use on another device.'); setTimeout(()=>{ LL.hide(); loadLevel(FREE); },1800); } else if(LL.justPaid){ LL.show(); LL.say('Payment seen but the key did not verify. Tap "I have a key" to paste one, or try again.',true); } });
 })();
 </script>
 
