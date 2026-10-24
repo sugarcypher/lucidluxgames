@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 224 224">
+  <rect width="224" height="224" rx="52" fill="#120c22"/>
+  <g fill="none" stroke="#3a2f55" stroke-width="2">
+    <rect x="40" y="40" width="144" height="144" rx="14" stroke="#b48cff" stroke-opacity=".75" stroke-width="3"/>
+    <path d="M64 40V184M88 40V184M136 40V184M160 40V184M40 64H184M40 88H184M40 136H184M40 160H184"/>
+    <path d="M112 40V184M40 112H184" stroke="#b48cff" stroke-opacity=".6" stroke-width="3"/>
+  </g>
+  <g fill="#ff6b8a">
+    <path d="M110 104c-12-16-32-14-42-4 12 0 19 6 22 13 4-9 10-12 20-9zm4 0c12-16 32-14 42-4-12 0-19 6-22 13-4-9-10-12-20-9zm-2-4c-5 0-8 5-8 11s3 11 8 11 8-5 8-11-3-11-8-11z"/>
+  </g>
+  <g font-family="Helvetica Neue,Arial,sans-serif" font-weight="700" font-size="17" fill="#efe9ff" text-anchor="middle">
+    <text x="52" y="58">5</text><text x="172" y="58">1</text><text x="76" y="154">2</text><text x="148" y="178">6</text>
+  </g>
+</svg>
