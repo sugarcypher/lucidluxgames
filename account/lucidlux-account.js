@@ -21,6 +21,9 @@
     url: 'https://tsbazrbdkojzhnglakcv.supabase.co',
     key: 'sb_publishable_vh7FTPtBkkg-RKyePDgfeA_nqIc-8py',
   };
+  // Supabase sends codes of the length set in the project (this one: 8 digits).
+  // Any length from 6 to 10 is accepted; the expected length signs in on its own.
+  var CODE_LEN = 8, CODE_MIN = 6, CODE_MAX = 10;
   var SESSION_KEY = 'lucidlux.session.v1';
   var UNDER13_KEY = 'lucidlux.under13.v1';
   var EMAIL_KEY = 'lucidlux.lastEmail.v1';
@@ -416,7 +419,7 @@
     if (step === 'email') {
       c.appendChild(close);
       c.appendChild(h('h2', { text: 'Your email' }));
-      c.appendChild(h('p', { 'class': 'llx-soft', text: 'We will email you a six-digit code. No password, ever. Your email is never shown to other players.' }));
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'We will email you a sign-in code. No password, ever. Your email is never shown to other players.' }));
       var em = h('input', { 'class': 'llx-in', type: 'email', inputmode: 'email', autocomplete: 'email', autocapitalize: 'off', spellcheck: 'false',
         placeholder: 'you@example.com', 'aria-label': 'Email address', value: f.email || read(EMAIL_KEY) || '' });
       var send = h('button', { 'class': 'llx-btn', type: 'button', text: 'Send my code' });
@@ -441,12 +444,12 @@
     if (step === 'code') {
       c.appendChild(close);
       c.appendChild(h('h2', { text: 'Enter the code' }));
-      c.appendChild(h('p', { 'class': 'llx-soft', text: 'We sent a six-digit code to ' + f.email + '. It can take a minute to arrive; check spam too.' }));
-      var code = h('input', { 'class': 'llx-in llx-code', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '6', pattern: '[0-9]*', 'aria-label': 'Six-digit code' });
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'We sent a code to ' + f.email + '. Type in every digit. It can take a minute to arrive; check spam too.' }));
+      var code = h('input', { 'class': 'llx-in llx-code', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: String(CODE_MAX), pattern: '[0-9]*', 'aria-label': 'Sign-in code' });
       var ok = h('button', { 'class': 'llx-btn', type: 'button', text: 'Sign in' });
       function verify() {
         var v = (code.value || '').replace(/\D/g, '');
-        if (v.length !== 6) { fail('The code has six digits.'); return; }
+        if (v.length < CODE_MIN) { fail('Type in every digit of the code.'); return; }
         ok.disabled = true; ok.textContent = 'Checking…'; fail('');
         self.verifyCode(f.email, v).then(function (r) {
           ok.disabled = false; ok.textContent = 'Sign in';
@@ -455,7 +458,7 @@
           else self.render('name');
         });
       }
-      code.addEventListener('input', function () { code.value = code.value.replace(/\D/g, '').slice(0, 6); if (code.value.length === 6) verify(); });
+      code.addEventListener('input', function () { code.value = code.value.replace(/\D/g, '').slice(0, CODE_MAX); if (code.value.length === CODE_LEN) verify(); });
       ok.addEventListener('click', verify);
       var resend = h('button', { 'class': 'llx-btn llx-ghost', type: 'button', text: 'Send a new code' });
       resend.addEventListener('click', function () {
