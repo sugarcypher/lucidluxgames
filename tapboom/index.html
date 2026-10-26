@@ -16,6 +16,606 @@
 <style>html,body{margin:0;padding:0;background:#FBFBFD;-webkit-text-size-adjust:100%}</style>
 </head>
 <body>
+<script>
+/*
+ * Lucid Lux account — one sign-in for every game on lucidlux.fyi.
+ *
+ * No libraries. Talks to Supabase Auth (email one-time code) and to the
+ * public.ll_* database functions directly over fetch. Every game on the site
+ * shares the same session, so signing in once signs you in everywhere.
+ *
+ *   const acct = LucidLuxAccount.create({ game: 'tapboom' });
+ *   acct.on(fn)                 // fn(state) on every change
+ *   acct.open()                 // the sign-in / account panel
+ *   await acct.submitRun({...}) // record a round; returns {ok, new_badges}
+ *   await acct.dailyBoard(id)   // anyone, signed in or not
+ *
+ * Order of the sign-in panel, deliberately: age first, then email. Nobody
+ * under 13 is asked for an email address at all.
+ */
+(function (global) {
+  'use strict';
+
+  var CONFIG = {
+    url: 'https://tsbazrbdkojzhnglakcv.supabase.co',
+    key: 'sb_publishable_vh7FTPtBkkg-RKyePDgfeA_nqIc-8py',
+  };
+  var SESSION_KEY = 'lucidlux.session.v1';
+  var UNDER13_KEY = 'lucidlux.under13.v1';
+  var EMAIL_KEY = 'lucidlux.lastEmail.v1';
+
+  function read(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
+  function write(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  function now() { return Math.floor(Date.now() / 1000); }
+
+  // ------------------------------------------------------------- transport
+
+  function request(path, opts, token) {
+    var headers = { 'apikey': CONFIG.key, 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 12000) : null;
+    return fetch(CONFIG.url + path, {
+      method: opts.method || 'POST',
+      headers: headers,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      signal: ctrl ? ctrl.signal : undefined,
+    }).then(function (res) {
+      if (timer) clearTimeout(timer);
+      return res.text().then(function (t) {
+        var data = null;
+        try { data = t ? JSON.parse(t) : null; } catch (e) { data = t; }
+        return { ok: res.ok, status: res.status, data: data };
+      });
+    }, function (err) {
+      if (timer) clearTimeout(timer);
+      return { ok: false, status: 0, data: { message: 'offline' }, offline: true };
+    });
+  }
+
+  function errorText(r) {
+    if (r.offline) return 'No connection. Your game is still saved on this device.';
+    var d = r.data || {};
+    var code = d.error_code || d.code || '';
+    var msg = d.msg || d.message || d.error_description || d.error || '';
+    if (code === 'otp_expired' || /expired|invalid/i.test(msg)) return 'That code did not work. Check the newest email, or send a new code.';
+    if (code === 'over_email_send_rate_limit' || r.status === 429) return 'Too many codes asked for. Wait a minute and try again.';
+    if (/not authorized/i.test(msg)) return 'Sign-in email is not switched on yet for this site.';
+    if (/email/i.test(msg) && /valid|format/i.test(msg)) return 'That email address does not look right.';
+    return msg ? String(msg) : 'Something went wrong. Try again in a moment.';
+  }
+
+  // ------------------------------------------------------------- the account
+
+  function Account(game) {
+    this.game = game;
+    this.session = read(SESSION_KEY);
+    this.me = null;              // { player, badges }
+    this.listeners = [];
+    this.refreshing = null;
+    this.panel = null;
+  }
+
+  Account.prototype.on = function (fn) { this.listeners.push(fn); return this; };
+  Account.prototype.emit = function () {
+    var s = this.state();
+    for (var i = 0; i < this.listeners.length; i++) { try { this.listeners[i](s); } catch (e) {} }
+  };
+  Account.prototype.state = function () {
+    return {
+      signedIn: !!this.session,
+      email: this.session && this.session.user ? this.session.user.email : null,
+      player: this.me ? this.me.player : null,
+      badges: this.me ? (this.me.badges || []) : [],
+      under13: !!read(UNDER13_KEY),
+    };
+  };
+  Object.defineProperty(Account.prototype, 'signedIn', { get: function () { return !!this.session; } });
+  Object.defineProperty(Account.prototype, 'player', { get: function () { return this.me ? this.me.player : null; } });
+  Object.defineProperty(Account.prototype, 'under13', { get: function () { return !!read(UNDER13_KEY); } });
+
+  Account.prototype.setSession = function (s) {
+    if (s && s.access_token) {
+      this.session = {
+        access_token: s.access_token,
+        refresh_token: s.refresh_token,
+        expires_at: s.expires_at || (now() + (s.expires_in || 3600)),
+        user: s.user ? { id: s.user.id, email: s.user.email } : (this.session ? this.session.user : null),
+      };
+    } else {
+      this.session = null;
+      this.me = null;
+    }
+    write(SESSION_KEY, this.session);
+  };
+
+  /** A valid access token, refreshed when it is within a minute of expiry. */
+  Account.prototype.token = function () {
+    var self = this;
+    var s = this.session;
+    if (!s) return Promise.resolve(null);
+    if (s.expires_at - now() > 60) return Promise.resolve(s.access_token);
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = request('/auth/v1/token?grant_type=refresh_token', { body: { refresh_token: s.refresh_token } })
+      .then(function (r) {
+        self.refreshing = null;
+        if (r.ok && r.data && r.data.access_token) { self.setSession(r.data); return self.session.access_token; }
+        if (r.offline) return s.access_token;          // try anyway; it may still be valid
+        self.setSession(null); self.emit();             // refresh refused: signed out
+        return null;
+      });
+    return this.refreshing;
+  };
+
+  /** Call a public.ll_* function. Signed in if possible, anonymous otherwise. */
+  Account.prototype.rpc = function (name, args) {
+    var self = this;
+    return this.token().then(function (tok) {
+      return request('/rest/v1/rpc/' + name, { body: args || {} }, tok).then(function (r) {
+        if (r.status === 401 && tok) { self.setSession(null); self.emit(); }
+        return r;
+      });
+    });
+  };
+
+  Account.prototype.sendCode = function (email) {
+    write(EMAIL_KEY, email);
+    return request('/auth/v1/otp', { body: { email: email, create_user: true, data: {} } })
+      .then(function (r) { return r.ok ? { ok: true } : { ok: false, error: errorText(r) }; });
+  };
+
+  Account.prototype.verifyCode = function (email, code) {
+    var self = this;
+    return request('/auth/v1/verify', { body: { type: 'email', email: email, token: String(code).replace(/\D/g, '') } })
+      .then(function (r) {
+        if (!r.ok || !r.data || !r.data.access_token) return { ok: false, error: errorText(r) };
+        self.setSession(r.data);
+        return self.refresh().then(function () { return { ok: true }; });
+      });
+  };
+
+  /** Reload the player record and earned badges. */
+  Account.prototype.refresh = function () {
+    var self = this;
+    if (!this.session) { this.me = null; this.emit(); return Promise.resolve(null); }
+    return this.rpc('ll_me').then(function (r) {
+      if (r.ok && r.data) self.me = { player: r.data.player || null, badges: r.data.badges || [] };
+      self.emit();
+      return self.me;
+    });
+  };
+
+  Account.prototype.signOut = function () {
+    var self = this;
+    var tok = this.session ? this.session.access_token : null;
+    this.setSession(null);
+    this.emit();
+    if (!tok) return Promise.resolve();
+    return request('/auth/v1/logout?scope=local', {}, tok).then(function () {}, function () {});
+  };
+
+  Account.prototype.nameOptions = function () {
+    return this.rpc('ll_name_options', { p_count: 6 }).then(function (r) {
+      return r.ok && Array.isArray(r.data) ? r.data.map(function (x) { return typeof x === 'string' ? x : x.ll_name_options; }) : [];
+    });
+  };
+
+  Account.prototype.createPlayer = function (name, ageBand, shape, color) {
+    var self = this;
+    return this.rpc('ll_create_player', { p_name: name, p_age_band: ageBand, p_avatar_shape: shape | 0, p_avatar_color: color | 0 })
+      .then(function (r) {
+        if (r.ok && r.data && r.data.ok) { self.me = { player: r.data.player, badges: r.data.badges || [] }; self.emit(); return { ok: true }; }
+        return { ok: false, error: errorText(r) };
+      });
+  };
+
+  Account.prototype.updatePlayer = function (patch) {
+    var self = this;
+    return this.rpc('ll_update_player', {
+      p_name: patch.name === undefined ? null : patch.name,
+      p_avatar_shape: patch.shape === undefined ? null : patch.shape,
+      p_avatar_color: patch.color === undefined ? null : patch.color,
+      p_research_opt_in: patch.research === undefined ? null : patch.research,
+    }).then(function (r) {
+      if (r.ok && r.data && r.data.ok) { self.me = { player: r.data.player, badges: r.data.badges || [] }; self.emit(); return { ok: true }; }
+      return { ok: false };
+    });
+  };
+
+  Account.prototype.saveGet = function () {
+    if (!this.session) return Promise.resolve(null);
+    return this.rpc('ll_save_get', { p_game: this.game }).then(function (r) { return r.ok ? r.data : null; });
+  };
+  Account.prototype.savePut = function (state, baseRev) {
+    if (!this.session || !this.player) return Promise.resolve({ ok: false, reason: 'signed_out' });
+    return this.rpc('ll_save_put', { p_game: this.game, p_state: state, p_base_rev: baseRev })
+      .then(function (r) { return r.ok && r.data ? r.data : { ok: false, reason: r.offline ? 'offline' : 'error' }; });
+  };
+
+  Account.prototype.submitRun = function (run) {
+    var self = this;
+    if (!this.session || !this.player) return Promise.resolve({ ok: false, reason: 'signed_out' });
+    return this.rpc('ll_submit_run', {
+      p_game: this.game, p_kind: run.kind, p_round_id: run.roundId || null,
+      p_score: Math.round(run.score || 0), p_accuracy: Math.round(run.accuracy || 0),
+      p_combo: run.combo | 0, p_level: run.level | 0, p_correct: run.correct | 0, p_wrong: run.wrong | 0,
+      p_duration_ms: Math.round(run.durationMs || 0), p_finished: !!run.finished, p_version: run.version || null,
+    }).then(function (r) {
+      var d = r.ok && r.data ? r.data : { ok: false, reason: r.offline ? 'offline' : 'error' };
+      if (d.ok && d.new_badges && d.new_badges.length && self.me) {
+        for (var i = 0; i < d.new_badges.length; i++) {
+          if (self.me.badges.indexOf(d.new_badges[i].slug) < 0) self.me.badges.push(d.new_badges[i].slug);
+        }
+        self.emit();
+      }
+      return d;
+    });
+  };
+
+  Account.prototype.dailyBoard = function (roundId, limit) {
+    return this.rpc('ll_daily_board', { p_game: this.game, p_round_id: roundId, p_limit: limit || 25 })
+      .then(function (r) { return r.ok && Array.isArray(r.data) ? r.data : null; });
+  };
+  Account.prototype.hallOfFame = function (limit) {
+    return this.rpc('ll_hall_of_fame', { p_game: this.game, p_limit: limit || 25 })
+      .then(function (r) { return r.ok && Array.isArray(r.data) ? r.data : null; });
+  };
+  Account.prototype.badges = function () {
+    return this.rpc('ll_badges', { p_game: this.game })
+      .then(function (r) { return r.ok && Array.isArray(r.data) ? r.data : null; });
+  };
+
+  Account.prototype.deleteAccount = function () {
+    var self = this;
+    return this.rpc('ll_delete_me').then(function (r) {
+      if (r.ok && r.data && r.data.ok) { self.setSession(null); self.emit(); return { ok: true }; }
+      return { ok: false, error: errorText(r) };
+    });
+  };
+
+  // ------------------------------------------------------------- save sync
+  //
+  // The game hands over three functions: collect() returns its saved state as
+  // one object, apply(state) installs one (and may reload the page), and
+  // progress(state) turns a state into one number so two copies can be
+  // compared. On sign-in the copy with more progress wins; after that, each
+  // push names the revision it started from, and a clash is settled the same way.
+
+  Account.prototype.useSave = function (hooks) {
+    this.saveHooks = hooks;
+    this.revKey = 'lucidlux.rev.' + this.game;
+    return this;
+  };
+
+  Account.prototype.reconcile = function () {
+    var self = this, h = this.saveHooks;
+    if (!h || !this.session || !this.player) return Promise.resolve('skipped');
+    return this.saveGet().then(function (remote) {
+      if (!remote) return 'offline';
+      var local = h.collect();
+      if (!remote.state) {
+        return self.savePut(local, 0).then(function (r) { if (r.ok) write(self.revKey, r.rev); return 'uploaded'; });
+      }
+      var known = read(self.revKey);
+      if (known === remote.rev) return 'current';           // this device wrote the latest copy
+      if (h.progress(remote.state) > h.progress(local)) {
+        write(self.revKey, remote.rev);
+        h.apply(remote.state);
+        return 'downloaded';
+      }
+      return self.savePut(local, remote.rev).then(function (r) { if (r.ok) write(self.revKey, r.rev); return 'uploaded'; });
+    });
+  };
+
+  Account.prototype.push = function () {
+    var self = this, h = this.saveHooks;
+    if (!h || !this.session || !this.player) return Promise.resolve(false);
+    if (this.pushTimer) clearTimeout(this.pushTimer);
+    return new Promise(function (resolve) {
+      self.pushTimer = setTimeout(function () {
+        var base = read(self.revKey) || 0;
+        self.savePut(h.collect(), base).then(function (r) {
+          if (r.ok) { write(self.revKey, r.rev); resolve(true); return; }
+          if (r.reason === 'conflict') { self.reconcile().then(function () { resolve(true); }); return; }
+          resolve(false);
+        });
+      }, 400);
+    });
+  };
+
+  // ------------------------------------------------------------- the panel
+
+  var CSS = [
+    '.llx-veil{position:fixed;inset:0;z-index:9999;background:rgba(10,10,14,.55);display:flex;align-items:center;justify-content:center;padding:16px;',
+    'font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-text-size-adjust:100%}',
+    '.llx-card{width:100%;max-width:420px;max-height:calc(100dvh - 32px);overflow:auto;background:#FFFFFF;color:#17171B;border-radius:20px;',
+    'padding:22px 20px 18px;box-shadow:0 18px 50px rgba(0,0,0,.35);font-size:18px;line-height:1.45}',
+    '@media (prefers-color-scheme:dark){.llx-card{background:#18181D;color:#F2F2F5}.llx-in{background:#0E0E12!important;color:#F2F2F5!important;border-color:#3A3A44!important}',
+    '.llx-ghost{color:#C9C9D3!important}.llx-soft{color:#A9A9B5!important}.llx-opt{background:#22222A!important;color:#F2F2F5!important;border-color:#3A3A44!important}}',
+    '.llx-card h2{margin:0 0 6px;font-size:24px;line-height:1.2}',
+    '.llx-soft{color:#5B5B66;font-size:16px;margin:0 0 14px}',
+    '.llx-in{width:100%;box-sizing:border-box;font:inherit;font-size:20px;padding:14px 14px;border-radius:12px;border:2px solid #CFCFD8;background:#FBFBFD;color:#17171B;margin:4px 0 12px}',
+    '.llx-code{letter-spacing:.35em;text-align:center;font-size:28px;font-variant-numeric:tabular-nums}',
+    '.llx-btn{display:block;width:100%;box-sizing:border-box;font:inherit;font-size:19px;font-weight:650;padding:15px 16px;border-radius:14px;border:0;',
+    'background:#E24B4B;color:#fff;margin:8px 0 0;cursor:pointer;min-height:54px}',
+    '.llx-btn[disabled]{opacity:.5;cursor:default}',
+    '.llx-ghost{background:transparent;color:#3A3A44;border:2px solid rgba(127,127,140,.35)}',
+    '.llx-danger{background:transparent;color:#C0392B;border:2px solid rgba(192,57,43,.45)}',
+    '.llx-opts{display:grid;grid-template-columns:1fr;gap:8px;margin:6px 0 4px}',
+    '.llx-opt{font:inherit;font-size:19px;padding:14px;border-radius:12px;border:2px solid #CFCFD8;background:#F4F4F8;color:#17171B;cursor:pointer;text-align:left;min-height:54px}',
+    '.llx-opt[aria-pressed="true"]{border-color:#E24B4B;box-shadow:0 0 0 2px #E24B4B inset}',
+    '.llx-err{color:#C0392B;font-size:16px;min-height:1.2em;margin:4px 0 0}',
+    '.llx-row{display:flex;gap:10px;align-items:center;justify-content:space-between;margin:10px 0}',
+    '.llx-name{font-size:22px;font-weight:700}',
+    '.llx-small{font-size:15px}',
+    '.llx-x{float:right;font:inherit;font-size:16px;background:none;border:0;color:inherit;opacity:.7;padding:4px 6px;cursor:pointer}',
+  ].join('');
+
+  function h(tag, attrs, kids) {
+    var e = document.createElement(tag);
+    if (attrs) for (var k in attrs) {
+      if (k === 'text') e.textContent = attrs[k];
+      else if (k === 'on') for (var ev in attrs.on) e.addEventListener(ev, attrs.on[ev]);
+      else if (attrs[k] !== null && attrs[k] !== undefined && attrs[k] !== false) e.setAttribute(k, attrs[k]);
+    }
+    (kids || []).forEach(function (c) { if (c) e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+    return e;
+  }
+
+  Account.prototype.open = function (opts) {
+    var self = this;
+    opts = opts || {};
+    if (!document.getElementById('llx-css')) {
+      document.head.appendChild(h('style', { id: 'llx-css', text: CSS }));
+    }
+    this.close();
+    var veil = h('div', { 'class': 'llx-veil', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Lucid Lux account' });
+    var card = h('div', { 'class': 'llx-card' });
+    veil.appendChild(card);
+    veil.addEventListener('click', function (e) { if (e.target === veil) self.close(); });
+    document.body.appendChild(veil);
+    this.panel = { veil: veil, card: card, flow: { avatar: opts.avatar || [0, 0] } };
+    // Stop game input underneath while the panel is up.
+    ['pointerdown', 'touchstart', 'keydown'].forEach(function (t) { veil.addEventListener(t, function (e) { e.stopPropagation(); }); });
+
+    if (this.session) {
+      this.refresh().then(function () { self.render(self.player ? 'account' : 'name'); });
+      this.render('wait');
+    } else if (this.under13) {
+      this.render('under13');
+    } else {
+      this.render('age');
+    }
+  };
+
+  Account.prototype.close = function () {
+    if (this.panel && this.panel.veil.parentNode) this.panel.veil.parentNode.removeChild(this.panel.veil);
+    this.panel = null;
+  };
+
+  Account.prototype.render = function (step) {
+    var self = this, p = this.panel;
+    if (!p) return;
+    var c = p.card, f = p.flow;
+    c.innerHTML = '';
+    var close = h('button', { 'class': 'llx-x', type: 'button', 'aria-label': 'Close', text: 'Close', on: { click: function () { self.close(); } } });
+    var err = h('p', { 'class': 'llx-err', role: 'alert' });
+    function fail(t) { err.textContent = t || ''; }
+
+    if (step === 'wait') {
+      c.appendChild(close);
+      c.appendChild(h('h2', { text: 'One moment…' }));
+      return;
+    }
+
+    if (step === 'age') {
+      // A neutral age question: no hint about which answer unlocks what.
+      c.appendChild(close);
+      c.appendChild(h('h2', { text: 'Save your progress' }));
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'Keep your level and badges, play on any device, and join the boards. First: how old are you?' }));
+      var opts = h('div', { 'class': 'llx-opts' });
+      [['Under 13', 'u13'], ['13 to 17', '13-17'], ['18 or older', '18+']].forEach(function (o) {
+        opts.appendChild(h('button', { 'class': 'llx-opt', type: 'button', text: o[0], on: { click: function () {
+          if (o[1] === 'u13') { write(UNDER13_KEY, { at: Date.now() }); self.render('under13'); self.emit(); return; }
+          f.age = o[1]; self.render('email');
+        } } }));
+      });
+      c.appendChild(opts);
+      return;
+    }
+
+    if (step === 'under13') {
+      c.appendChild(close);
+      c.appendChild(h('h2', { text: 'Keep playing as a guest' }));
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'Accounts are for players 13 and older. Everything you do is still saved on this device, and every game stays free.' }));
+      c.appendChild(h('button', { 'class': 'llx-btn', type: 'button', text: 'Back to the game', on: { click: function () { self.close(); } } }));
+      return;
+    }
+
+    if (step === 'email') {
+      c.appendChild(close);
+      c.appendChild(h('h2', { text: 'Your email' }));
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'We will email you a six-digit code. No password, ever. Your email is never shown to other players.' }));
+      var em = h('input', { 'class': 'llx-in', type: 'email', inputmode: 'email', autocomplete: 'email', autocapitalize: 'off', spellcheck: 'false',
+        placeholder: 'you@example.com', 'aria-label': 'Email address', value: f.email || read(EMAIL_KEY) || '' });
+      var send = h('button', { 'class': 'llx-btn', type: 'button', text: 'Send my code' });
+      function go() {
+        var v = (em.value || '').trim();
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { fail('That email address does not look right.'); return; }
+        send.disabled = true; send.textContent = 'Sending…'; fail('');
+        self.sendCode(v).then(function (r) {
+          send.disabled = false; send.textContent = 'Send my code';
+          if (!r.ok) { fail(r.error); return; }
+          f.email = v; f.sentAt = Date.now(); self.render('code');
+        });
+      }
+      send.addEventListener('click', go);
+      em.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+      c.appendChild(em); c.appendChild(send); c.appendChild(err);
+      c.appendChild(h('button', { 'class': 'llx-btn llx-ghost', type: 'button', text: 'Back', on: { click: function () { self.render('age'); } } }));
+      setTimeout(function () { try { em.focus(); } catch (e) {} }, 50);
+      return;
+    }
+
+    if (step === 'code') {
+      c.appendChild(close);
+      c.appendChild(h('h2', { text: 'Enter the code' }));
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'We sent a six-digit code to ' + f.email + '. It can take a minute to arrive; check spam too.' }));
+      var code = h('input', { 'class': 'llx-in llx-code', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '6', pattern: '[0-9]*', 'aria-label': 'Six-digit code' });
+      var ok = h('button', { 'class': 'llx-btn', type: 'button', text: 'Sign in' });
+      function verify() {
+        var v = (code.value || '').replace(/\D/g, '');
+        if (v.length !== 6) { fail('The code has six digits.'); return; }
+        ok.disabled = true; ok.textContent = 'Checking…'; fail('');
+        self.verifyCode(f.email, v).then(function (r) {
+          ok.disabled = false; ok.textContent = 'Sign in';
+          if (!r.ok) { fail(r.error); return; }
+          if (self.player) { self.afterSignIn(); self.render('account'); }
+          else self.render('name');
+        });
+      }
+      code.addEventListener('input', function () { code.value = code.value.replace(/\D/g, '').slice(0, 6); if (code.value.length === 6) verify(); });
+      ok.addEventListener('click', verify);
+      var resend = h('button', { 'class': 'llx-btn llx-ghost', type: 'button', text: 'Send a new code' });
+      resend.addEventListener('click', function () {
+        var wait = 60 - Math.floor((Date.now() - (f.sentAt || 0)) / 1000);
+        if (wait > 0) { fail('You can ask for a new code in ' + wait + ' seconds.'); return; }
+        self.sendCode(f.email).then(function (r) { if (r.ok) { f.sentAt = Date.now(); fail('A new code is on its way.'); } else fail(r.error); });
+      });
+      c.appendChild(code); c.appendChild(ok); c.appendChild(err); c.appendChild(resend);
+      c.appendChild(h('button', { 'class': 'llx-btn llx-ghost', type: 'button', text: 'Use a different email', on: { click: function () { self.render('email'); } } }));
+      setTimeout(function () { try { code.focus(); } catch (e) {} }, 50);
+      return;
+    }
+
+    if (step === 'name') {
+      if (!f.age) { self.render('age2'); return; }
+      c.appendChild(h('h2', { text: 'Pick your name' }));
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'This is what other players see. A stone and a creature; you can change it later.' }));
+      var list = h('div', { 'class': 'llx-opts' });
+      var pick = h('button', { 'class': 'llx-btn', type: 'button', text: 'Use this name', disabled: 'disabled' });
+      var chosen = null;
+      function fill() {
+        list.innerHTML = '';
+        list.appendChild(h('p', { 'class': 'llx-soft', text: 'Finding names…' }));
+        self.nameOptions().then(function (names) {
+          list.innerHTML = '';
+          if (!names.length) { list.appendChild(h('p', { 'class': 'llx-err', text: 'Could not load names. Check your connection.' })); return; }
+          names.forEach(function (n) {
+            var b = h('button', { 'class': 'llx-opt', type: 'button', 'aria-pressed': 'false', text: n });
+            b.addEventListener('click', function () {
+              chosen = n; pick.disabled = false;
+              Array.prototype.forEach.call(list.children, function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+            });
+            list.appendChild(b);
+          });
+        });
+      }
+      pick.addEventListener('click', function () {
+        if (!chosen) return;
+        pick.disabled = true; pick.textContent = 'Saving…';
+        var av = f.avatar || [0, 0];
+        self.createPlayer(chosen, f.age, av[0], av[1]).then(function (r) {
+          pick.disabled = false; pick.textContent = 'Use this name';
+          if (!r.ok) { fail(r.error); return; }
+          self.afterSignIn(); self.render('account');
+        });
+      });
+      c.appendChild(list);
+      c.appendChild(h('button', { 'class': 'llx-btn llx-ghost', type: 'button', text: 'Show other names', on: { click: fill } }));
+      c.appendChild(pick); c.appendChild(err);
+      fill();
+      return;
+    }
+
+    if (step === 'age2') {
+      // Signed in on another game or device but no player record yet.
+      c.appendChild(h('h2', { text: 'One question first' }));
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'How old are you?' }));
+      var o2 = h('div', { 'class': 'llx-opts' });
+      [['Under 13', 'u13'], ['13 to 17', '13-17'], ['18 or older', '18+']].forEach(function (o) {
+        o2.appendChild(h('button', { 'class': 'llx-opt', type: 'button', text: o[0], on: { click: function () {
+          if (o[1] === 'u13') { write(UNDER13_KEY, { at: Date.now() }); self.signOut(); self.render('under13'); return; }
+          f.age = o[1]; self.render('name');
+        } } }));
+      });
+      c.appendChild(o2);
+      return;
+    }
+
+    if (step === 'account') {
+      var pl = this.player || {};
+      c.appendChild(close);
+      c.appendChild(h('h2', { text: 'Your account' }));
+      c.appendChild(h('p', { 'class': 'llx-name', text: pl.name + ' #' + String(pl.number || 0).padStart(4, '0') }));
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'Signed in as ' + ((this.session && this.session.user && this.session.user.email) || 'you') +
+        '. Your progress is saved to this account, on every Lucid Lux game.' }));
+      c.appendChild(h('p', { 'class': 'llx-soft llx-small', text: (this.me && this.me.badges ? this.me.badges.length : 0) + ' badges earned.' }));
+      c.appendChild(h('button', { 'class': 'llx-btn llx-ghost', type: 'button', text: 'Change my name', on: { click: function () { self.render('rename'); } } }));
+      c.appendChild(h('button', { 'class': 'llx-btn llx-ghost', type: 'button', text: 'Sign out on this device', on: { click: function () { self.signOut().then(function () { self.close(); }); } } }));
+      c.appendChild(h('button', { 'class': 'llx-btn llx-danger', type: 'button', text: 'Delete my account', on: { click: function () { self.render('delete'); } } }));
+      c.appendChild(h('button', { 'class': 'llx-btn', type: 'button', text: 'Done', on: { click: function () { self.close(); } } }));
+      return;
+    }
+
+    if (step === 'rename') {
+      c.appendChild(h('h2', { text: 'Change my name' }));
+      var l2 = h('div', { 'class': 'llx-opts' });
+      self.nameOptions().then(function (names) {
+        names.forEach(function (n) {
+          l2.appendChild(h('button', { 'class': 'llx-opt', type: 'button', text: n, on: { click: function () {
+            self.updatePlayer({ name: n }).then(function () { self.render('account'); });
+          } } }));
+        });
+      });
+      c.appendChild(l2);
+      c.appendChild(h('button', { 'class': 'llx-btn llx-ghost', type: 'button', text: 'Show other names', on: { click: function () { self.render('rename'); } } }));
+      c.appendChild(h('button', { 'class': 'llx-btn llx-ghost', type: 'button', text: 'Keep my name', on: { click: function () { self.render('account'); } } }));
+      return;
+    }
+
+    if (step === 'delete') {
+      c.appendChild(h('h2', { text: 'Delete your account?' }));
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'This removes your name, saved progress, scores and badges from Lucid Lux for good. The games keep working as a guest on this device. This cannot be undone.' }));
+      var del = h('button', { 'class': 'llx-btn llx-danger', type: 'button', text: 'Yes, delete everything' });
+      del.addEventListener('click', function () {
+        del.disabled = true; del.textContent = 'Deleting…';
+        self.deleteAccount().then(function (r) {
+          if (!r.ok) { del.disabled = false; del.textContent = 'Yes, delete everything'; fail(r.error); return; }
+          try { localStorage.removeItem(self.revKey || ''); } catch (e) {}
+          self.render('deleted');
+        });
+      });
+      c.appendChild(del); c.appendChild(err);
+      c.appendChild(h('button', { 'class': 'llx-btn', type: 'button', text: 'Keep my account', on: { click: function () { self.render('account'); } } }));
+      return;
+    }
+
+    if (step === 'deleted') {
+      c.appendChild(h('h2', { text: 'Account deleted' }));
+      c.appendChild(h('p', { 'class': 'llx-soft', text: 'Everything Lucid Lux held about you is gone. You are playing as a guest on this device.' }));
+      c.appendChild(h('button', { 'class': 'llx-btn', type: 'button', text: 'Back to the game', on: { click: function () { self.close(); } } }));
+      return;
+    }
+  };
+
+  /** After a fresh sign-in: line up this device's save with the account's. */
+  Account.prototype.afterSignIn = function () {
+    var self = this;
+    this.reconcile().then(function (how) { if (self.onSynced) self.onSynced(how); });
+  };
+
+  global.LucidLuxAccount = {
+    create: function (o) {
+      var a = new Account((o && o.game) || 'tapboom');
+      if (a.session) a.refresh();
+      return a;
+    },
+    config: CONFIG,
+  };
+})(typeof window !== 'undefined' ? window : this);
+
+</script>
 <style>
 html, body { height: 100%; }
 /* TapBoom — layout and chrome. The board itself is canvas-drawn. */
@@ -634,6 +1234,14 @@ body.dark .tickets { color: #9BC8F0; }
 }
 .card p.ticketline.empty { color: var(--accent); font-weight: 700; }
 
+
+/* Accounts (lucidlux.fyi only; hidden everywhere else) */
+.acctbox { border: 1.5px solid var(--panel-line); border-radius: 14px; padding: 10px 12px; margin: 10px 0 4px; }
+.acctbox p { margin: 0 0 6px; font-size: 14px; color: var(--ink-soft); }
+.acctbox .btn { margin-top: 4px; }
+.accttoast { position: fixed; left: 50%; bottom: calc(18px + var(--safe-b)); transform: translateX(-50%);
+  z-index: 60; max-width: min(92vw, 420px); padding: 12px 16px; border-radius: 14px; font-size: 16px; font-weight: 650;
+  background: var(--ink); color: var(--bg); box-shadow: var(--shadow); text-align: center; pointer-events: none; }
 </style>
 <canvas id="board" aria-label="Game board"></canvas>
 <canvas id="fx" aria-hidden="true"></canvas>
@@ -670,6 +1278,7 @@ body.dark .tickets { color: #9BC8F0; }
 <div id="tokenLabel" class="tokenLabel"></div>
 <div id="comboBurst" class="comboBurst" aria-live="polite"><b id="cbNum">10</b><span>IN A ROW</span></div>
 <div id="debugBox" class="debugBox" hidden></div>
+<div id="acctToast" class="accttoast" role="status" aria-live="polite" hidden></div>
 
 <!-- -------------------------------------------------------- Screens ---- -->
 <div id="screens">
@@ -694,8 +1303,8 @@ body.dark .tickets { color: #9BC8F0; }
         <i>A two-minute lesson. No clock, no score.</i>
       </button>
       <button class="btn big" id="btnPlay">
-        <b>Play</b>
-        <i>Eight levels. Pop your way through each gate.</i>
+        <b id="playTitle">Play</b>
+        <i id="playSub">Start at level 1. One new thing at each level.</i>
       </button>
       <p class="ticketline" id="ticketLine">72 rounds left today</p>
 
@@ -704,6 +1313,7 @@ body.dark .tickets { color: #9BC8F0; }
           <b>Daily Challenge</b>
           <i id="dailyState">One 60-second round · everyone plays the same board</i>
         </button>
+        <button class="btn ghost" id="btnStartOver" hidden>Start over from level 1</button>
         <div class="menugrid">
           <button class="btn" id="btnBoard">Leaderboard</button>
           <button class="btn" id="btnHof">Hall of Fame</button>
@@ -727,10 +1337,10 @@ body.dark .tickets { color: #9BC8F0; }
       <p>An object counts if <b>either</b> its shape <b>or</b> its colour is shown. Wrong taps cost points; glowing tokens are always safe.</p>
       <p><b>You get warning, and you get grace.</b> The set that is about to arrive appears outside the hub a few seconds early, and the rim drains as the change approaches. For a moment after any change, a tap that would have been right just before it is forgiven — it reads <i>just missed</i> and costs nothing.</p>
       <p><b>The background's colour is the play mode</b> — zoom out, warm or cool only, greyscale, twinkle, glitch. Modes change how the board looks and moves. They never change what is legal to tap.</p>
-      <p><b>Rush pieces</b> (from level 2): now and then a new piece arrives inside a spinning rainbow ring that runs out in under a second. Tap it in time and, if it is allowed, it pops together with every piece it would have broken into, all scored at once. If it is forbidden, you lose that whole amount instead.</p>
+      <p><b>Rush pieces</b> (from level 6): now and then a new piece arrives inside a spinning rainbow ring that runs out in under a second. Tap it in time and, if it is allowed, it pops together with every piece it would have broken into, all scored at once. If it is forbidden, you lose that whole amount instead.</p>
       <p><b>Chains:</b> every 10 right taps in a row is celebrated, and the chain multiplies your points.</p>
-      <p><b>SLASH</b> (from level 4): tap a legal piece and, without lifting, drag a line — straight or curved — to another legal piece. Everything the line crosses is cleared, and the forbidden pieces it happens to cross cost you nothing. It needs a few seconds to recharge.</p>
-      <p><b>Every level has a gate.</b> The strip under the clock shows each shape and colour the level has unlocked and how many of each you still owe. Only correct pops count, every fragment counts as one, and a slash, purge or clear counts whatever it took. When every mark has its tick the gate is open: the level ends at the end of that round — round one, if you are quick — and the next begins. If a round ends with the gate still shut, the next round starts on the same level, tallies kept, until it opens. The quota starts at 8 of each and rises with the level.</p>
+      <p><b>SLASH</b> (from level 16): tap a legal piece and, without lifting, drag a line — straight or curved — to another legal piece. Everything the line crosses is cleared, and the forbidden pieces it happens to cross cost you nothing. It needs a few seconds to recharge.</p>
+      <p><b>Every level has a gate.</b> The strip under the clock shows each shape and colour the level has unlocked and how many of each you still owe. Only correct pops count, every fragment counts as one, and a slash, purge or clear counts whatever it took. Each level also asks for a number of rounds, 10 at the first level and one more at each level after. When every mark has its tick and those rounds are played, the gate opens and the next level brings exactly one new thing. The faint gem behind the panel fills as you get there. Your place is saved: Play picks up where you stopped. The quota starts at 14 of each and rises with the level.</p>
       <p><b>Ranks.</b> Every level carries a mineral, from the most common on Earth (feldspar) to the rarest known (kyawthuite, of which one specimen exists). The small gem beside the level number is your rank, and every new rank comes with one true fact about its stone.</p>
       <p><b>Play tickets</b> pay for rounds: one ticket covers three rounds, you hold up to 24, and one comes back every hour whether the game is open or not. Your first Daily Challenge each day is always free — the leaderboard is never pay-to-enter.</p>
       <p>A large, faint <b>globe</b> drains in the middle of the board for the last two seconds before anything changes — an indicator, the background rule, or the play mode. It carries no numbers; it is there to be seen out of the corner of your eye.</p>
@@ -802,6 +1412,7 @@ body.dark .tickets { color: #9BC8F0; }
         <li><span>Correct / wrong</span><b id="rsTaps">0 / 0</b></li>
       </ul>
       <button class="btn primary" id="btnAgain">Play again</button>
+      <button class="btn" id="btnRsSave" hidden>Keep your progress · sign in</button>
       <button class="btn" id="btnMenu">Main menu</button>
     </div>
   </section>
@@ -817,6 +1428,7 @@ body.dark .tickets { color: #9BC8F0; }
       <p class="goal" id="drGoal"></p>
       <ol class="lboard mini" id="drBoard"></ol>
       <button class="btn primary" id="btnDrRetry">Try again today</button>
+      <button class="btn" id="btnDrSave" hidden>Put your score on the board · sign in</button>
       <button class="btn" id="btnDrBoard">Full leaderboard</button>
       <button class="btn ghost" id="btnDrMenu">Main menu</button>
     </div>
@@ -857,6 +1469,11 @@ body.dark .tickets { color: #9BC8F0; }
             <button class="btn tiny" id="btnClearAvatar">Clear image</button>
           </div>
         </div>
+      </div>
+
+      <div class="acctbox" id="acctBox" hidden>
+        <p id="acctLine">Playing as a guest on this device.</p>
+        <button class="btn primary" id="btnAccount">Save my progress</button>
       </div>
 
       <div class="statgrid">
@@ -902,7 +1519,7 @@ body.dark .tickets { color: #9BC8F0; }
 // Pure data + a deterministic RNG. Safe to import in Node (no DOM access at import time
 // beyond a guarded `location` read) so tests can use it.
 
-const VERSION = '1.2.5';
+const VERSION = '1.4.0';
 
 const QUERY = (typeof location !== 'undefined' && location.search)
   ? new URLSearchParams(location.search)
@@ -1056,6 +1673,11 @@ const CONFIG = {
   RUSH_FROM_LEVEL: 2,           // 1-based; level 1 stays simple
   // Combo milestones: celebrated at 10 and at every 10 after.
   COMBO_CELEBRATE_EVERY: 10,
+  // The ladder: gates 75% bigger than v1.2, and a floor of rounds per level
+  // that starts at 10 and grows by 1 each level.
+  QUOTA_SCALE: 1.75,
+  LEVEL_MIN_ROUNDS: 10,
+  LEVEL_MIN_ROUNDS_STEP: 1,
   // Level screens: Skip appears only after this long without Next.
   LEVEL_SKIP_DELAY_MS: 5000,
   MIN_PIECE_RADIUS: 10,         // px floor so deep generations stay visible
@@ -1212,64 +1834,102 @@ const CONFIG = {
 // flip 22-30 s -> 8.5-12 s, play mode 40-50 s -> 16-24 s.
 // ---------------------------------------------------------------------------
 
-const LEVELS = [
-  { shapes: 3, colors: 3, areaFraction: 0.55, indicatorShapes: 1, indicatorColors: 1,
-    targetObjects: 6,  roundSeconds: 45, roundStep: 0, quotaPer: 8, dualChance: 0, indicatorIntervalMs: [12000, 16000], modeIntervalMs: [22000, 30000],
-    explodeDepth: 2, tokenEveryMs: 20000,
-    tokenPool: ['CLEAR', 'SLOW', 'DOUBLE'],
-    variants: ['PLAIN'], variantIntervalMs: [40000, 50000],
-    newText: ['3 shapes · 3 colors', 'Tap to explode. Read the hub.', 'Pop every shape and colour enough times to open the gate'] },
-
-  { shapes: 4, colors: 4, areaFraction: 0.62, indicatorShapes: 1, indicatorColors: 1,
-    targetObjects: 8,  roundSeconds: 46, roundStep: 2, quotaPer: 10, dualChance: 0, indicatorIntervalMs: [11800, 15800], modeIntervalMs: [21700, 29600],
-    explodeDepth: 2, tokenEveryMs: 20000,
-    tokenPool: ['CLEAR', 'SLOW', 'DOUBLE', 'SHIELD'],
-    variants: ['PLAIN', 'ZOOM'], variantIntervalMs: [39500, 49500],
-    newText: ['New shape: STAR', 'New color: GREEN', 'New token: SHIELD', 'New mode: ZOOM OUT'] },
-
-  { shapes: 4, colors: 4, areaFraction: 0.70, indicatorShapes: 2, indicatorColors: 1,
-    targetObjects: 8,  roundSeconds: 47, roundStep: 3, quotaPer: 12, dualChance: 0, indicatorIntervalMs: [11300, 15100], modeIntervalMs: [20900, 28500],
-    explodeDepth: 3, tokenEveryMs: 19000,
-    tokenPool: ['CLEAR', 'SLOW', 'DOUBLE', 'SHIELD', 'COLOR_PURGE'],
-    variants: ['PLAIN', 'ZOOM', 'TWINKLE'], variantIntervalMs: [38000, 47900],
-    newText: ['Indicators now show 2 shapes', 'Fragments split 3 deep', 'New token: COLOR PURGE', 'New mode: TWINKLE'] },
-
-  { shapes: 5, colors: 5, areaFraction: 0.78, indicatorShapes: 2, indicatorColors: 2,
-    targetObjects: 10, roundSeconds: 48, roundStep: 4, quotaPer: 14, dualChance: 0, indicatorIntervalMs: [10400, 14000], modeIntervalMs: [19500, 26700],
-    explodeDepth: 3, tokenEveryMs: 18000,
-    tokenPool: ['CLEAR', 'SLOW', 'DOUBLE', 'SHIELD', 'COLOR_PURGE', 'SHAPE_PURGE', 'FREEZE'],
-    variants: ['PLAIN', 'ZOOM', 'TWINKLE', 'GLITCH'], variantIntervalMs: [35600, 45200],
-    newText: ['New shape: HEXAGON', 'New color: PURPLE', 'Indicators now show 2 colors', 'New mode: GLITCH', 'Unlocked: SLASH — drag between valid pieces'] },
-
-  { shapes: 6, colors: 6, areaFraction: 0.85, indicatorShapes: 2, indicatorColors: 2,
-    targetObjects: 12, roundSeconds: 50, roundStep: 5, quotaPer: 16, dualChance: 0, indicatorIntervalMs: [9100, 12500], modeIntervalMs: [17600, 24100],
-    explodeDepth: 4, tokenEveryMs: 18000,
-    tokenPool: ['CLEAR', 'SLOW', 'DOUBLE', 'SHIELD', 'COLOR_PURGE', 'SHAPE_PURGE', 'FREEZE', 'INVERT'],
-    variants: ['PLAIN', 'ZOOM', 'TWINKLE', 'GLITCH', 'WARM', 'COOL'], variantIntervalMs: [32200, 41500],
-    newText: ['New shape: DIAMOND', 'New color: ORANGE', 'Fragments split 4 deep', 'New modes: WARM ONLY / COOL ONLY'] },
-
-  { shapes: 6, colors: 6, areaFraction: 0.92, indicatorShapes: 3, indicatorColors: 2,
-    targetObjects: 12, roundSeconds: 52, roundStep: 6, quotaPer: 18, dualChance: 0.25, indicatorIntervalMs: [7500, 10500], modeIntervalMs: [15100, 20800],
-    explodeDepth: 4, tokenEveryMs: 17000,
-    tokenPool: ['CLEAR', 'SLOW', 'DOUBLE', 'SHIELD', 'COLOR_PURGE', 'SHAPE_PURGE', 'FREEZE', 'INVERT', 'SHATTER'],
-    variants: ['PLAIN', 'ZOOM', 'TWINKLE', 'WARM', 'COOL', 'GLITCH', 'GUESS'], variantIntervalMs: [27800, 36700],
-    newText: ['Indicators now show 3 shapes', 'New token: SHATTER', 'New mode: GUESS',
-      'Two-colour pieces — either colour counts'] },
-
-  { shapes: 7, colors: 7, areaFraction: 1.0, indicatorShapes: 3, indicatorColors: 3,
-    targetObjects: 14, roundSeconds: 54, roundStep: 7, quotaPer: 21, dualChance: 0.35, indicatorIntervalMs: [5500, 8100], modeIntervalMs: [12100, 16800],
-    explodeDepth: 4, tokenEveryMs: 16000,
-    tokenPool: ['CLEAR', 'SLOW', 'DOUBLE', 'SHIELD', 'COLOR_PURGE', 'SHAPE_PURGE', 'FREEZE', 'INVERT', 'SHATTER', 'SWEEP'],
-    variants: ['PLAIN', 'ZOOM', 'TWINKLE', 'WARM', 'COOL', 'GLITCH', 'GUESS'], variantIntervalMs: [22400, 30900],
-    newText: ['New shape: CRESCENT', 'New color: CYAN', 'Full screen board', 'Rounds keep getting longer'] },
-
-  { shapes: 8, colors: 8, areaFraction: 1.0, indicatorShapes: 3, indicatorColors: 3,
-    targetObjects: 16, roundSeconds: 56, roundStep: 8, quotaPer: 24, dualChance: 0.45, indicatorIntervalMs: [3200, 5200], modeIntervalMs: [8500, 12000],
-    explodeDepth: 4, tokenEveryMs: 15000,
-    tokenPool: ['CLEAR', 'SLOW', 'DOUBLE', 'SHIELD', 'COLOR_PURGE', 'SHAPE_PURGE', 'FREEZE', 'INVERT', 'SHATTER', 'SWEEP'],
-    variants: ['PLAIN', 'ZOOM', 'TWINKLE', 'WARM', 'COOL', 'GLITCH', 'GUESS'], variantIntervalMs: [16000, 24000],
-    newText: ['New shape: CROSS', 'New color: PINK', 'More two-colour pieces', 'Everything is in play'] },
+// THE LADDER. One new thing per level, never more: a token, a shape, a
+// colour, a mode, a wider panel, a deeper break. Everything that moves smoothly
+// (speed, board size, round length, gate size, how often the rules change) is
+// eased across the whole ladder instead of jumping, on the same convex tempo
+// curve as before. Each level also demands a minimum number of rounds, growing
+// by one per level, so the new thing is lived with before the next arrives.
+const UNLOCKS = [
+  null,                       // 1: the starting set
+  { token: 'SLOW' },
+  { shape: true },            // star
+  { token: 'DOUBLE' },
+  { color: true },            // green
+  { rush: true },
+  { token: 'SHIELD' },
+  { mode: 'ZOOM' },
+  { panelShapes: true },
+  { depth: true },
+  { token: 'COLOR_PURGE' },
+  { mode: 'TWINKLE' },
+  { shape: true },            // hexagon
+  { color: true },            // purple
+  { panelColors: true },
+  { slash: true },
+  { token: 'SHAPE_PURGE' },
+  { mode: 'GLITCH' },
+  { token: 'FREEZE' },
+  { shape: true },            // diamond
+  { color: true },            // orange
+  { depth: true },
+  { mode: 'WARM' },
+  { mode: 'COOL' },
+  { token: 'INVERT' },
+  { panelShapes: true },
+  { dual: 0.25 },
+  { token: 'SHATTER' },
+  { mode: 'GUESS' },
+  { shape: true },            // crescent
+  { color: true },            // cyan
+  { panelColors: true },
+  { dual: 0.35 },
+  { token: 'SWEEP' },
+  { fullBoard: true },
+  { shape: true },            // cross
+  { color: true },            // pink
+  { dual: 0.45 },
 ];
+
+function buildLevels() {
+  const out = [];
+  const st = { shapes: 3, colors: 3, ps: 1, pc: 1, depth: 2, dual: 0, tokens: ['CLEAR'], variants: ['PLAIN'], full: false };
+  const last = UNLOCKS.length - 1;
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const span = (a, b, f) => [Math.round(lerp(a[0], b[0], f)), Math.round(lerp(a[1], b[1], f))];
+  for (let i = 0; i < UNLOCKS.length; i++) {
+    const u = UNLOCKS[i];
+    let text = '3 shapes · 3 colors';
+    if (u) {
+      if (u.token) { st.tokens.push(u.token); text = 'New token: ' + u.token.replace('_', ' '); }
+      if (u.mode) { st.variants.push(u.mode); text = 'New mode: ' + u.mode; }
+      if (u.shape) { st.shapes++; text = 'New shape'; }
+      if (u.color) { st.colors++; text = 'New color'; }
+      if (u.panelShapes) { st.ps++; text = 'Panel shows ' + st.ps + ' shapes'; }
+      if (u.panelColors) { st.pc++; text = 'Panel shows ' + st.pc + ' colors'; }
+      if (u.depth) { st.depth++; text = 'Pieces break ' + st.depth + ' times'; }
+      if (u.dual) { st.dual = u.dual; text = 'Two-color pieces'; }
+      if (u.fullBoard) { st.full = true; text = 'Full screen board'; }
+      if (u.slash) text = 'New ability: SLASH';
+      if (u.rush) text = 'Rush pieces';
+    }
+    const t = i / last, f = t * t;
+    out.push({
+      shapes: st.shapes, colors: st.colors,
+      areaFraction: st.full ? 1 : Math.round(lerp(0.55, 0.92, t) * 100) / 100,
+      indicatorShapes: st.ps, indicatorColors: st.pc,
+      targetObjects: Math.round(lerp(6, 16, t)),
+      roundSeconds: Math.round(lerp(45, 56, t)), roundStep: Math.round(lerp(0, 8, t)),
+      quotaPer: Math.round(lerp(8, 24, t) * CONFIG.QUOTA_SCALE),
+      minRounds: CONFIG.LEVEL_MIN_ROUNDS + i * CONFIG.LEVEL_MIN_ROUNDS_STEP,
+      dualChance: st.dual,
+      indicatorIntervalMs: span([12000, 16000], [3200, 5200], f),
+      modeIntervalMs: span([22000, 30000], [8500, 12000], f),
+      explodeDepth: st.depth,
+      tokenEveryMs: Math.round(lerp(20000, 15000, t)),
+      tokenPool: st.tokens.slice(),
+      variants: st.variants.slice(),
+      variantIntervalMs: span([40000, 50000], [16000, 24000], f),
+      newText: [text],
+    });
+  }
+  return out;
+}
+
+const LEVELS = buildLevels();
+const unlockLevel = (key) => UNLOCKS.findIndex((u) => u && u[key]) + 1;   // 1-based
+CONFIG.DUAL_UNLOCK_LEVEL = unlockLevel('dual');
+CONFIG.RUSH_FROM_LEVEL = unlockLevel('rush');
 
 /**
  * The Daily Challenge: ONE 60-second round, identical for everybody, seeded from
@@ -1334,21 +1994,21 @@ const ROUNDS_PER_LEVEL = 3;
  */
 const MINERALS = [
   { from: 1,  name: 'Feldspar',      hex: ['#E7A07A'], fact: 'The most common mineral family on Earth: about 60% of the crust by weight.' },
-  { from: 2,  name: 'Quartz',        hex: ['#C9DCE6'], fact: 'The second most common mineral in the outer Earth, about 12% of it by mass.' },
-  { from: 3,  name: 'Amethyst',      hex: ['#9B59D0'], fact: 'Purple quartz. The color comes from traces of iron, changed by natural radiation inside the rock.' },
-  { from: 4,  name: 'Garnet',        hex: ['#9A1F33'], fact: 'A mine in the Adirondack Mountains of New York yields the largest single garnet crystals in the world, up to 35 cm across.' },
-  { from: 5,  name: 'Topaz',         hex: ['#E8A33D'], fact: 'Number 8 on the 10-step scale of scratch hardness. It scratches quartz; only corundum and diamond scratch it.' },
-  { from: 6,  name: 'Diamond',       hex: ['#DCEFFF'], fact: 'Not rare at all: about 130 million carats are mined every year. Most formed 150 to 250 km underground, 1 to 3.5 billion years ago.' },
-  { from: 7,  name: 'Opal',          hex: ['#9FE3E0', '#F3B6E0', '#FFE59E', '#B9C8FF'], fact: 'Not a crystal at all, and about 6 to 10% water. Australia has been credited with roughly 95% of the precious opal ever mined.' },
-  { from: 8,  name: 'Emerald',       hex: ['#1E9E5A'], fact: 'Green beryl, colored by a trace of chromium. Colombia has long been the largest producer.' },
-  { from: 9,  name: 'Ruby',          hex: ['#C4122F'], fact: 'Red corundum: the same mineral as sapphire, made red by a trace of chromium. The Mogok Valley in Myanmar was the main source for centuries.' },
-  { from: 11, name: 'Alexandrite',   hex: ['#2E8B6A', '#A0284B'], fact: 'Green in daylight, red under a lamp bulb. Fine color-changing stones are extremely rare.' },
-  { from: 13, name: 'Benitoite',     hex: ['#3557D6'], fact: 'California\'s state gem since 1985. Gem-quality crystals have come from only one mine, in San Benito County.' },
-  { from: 15, name: 'Grandidierite', hex: ['#3FB3A9'], fact: 'Blue-green, first found in 1902 in southern Madagascar. Large clear stones are extremely rare.' },
-  { from: 17, name: 'Red beryl',     hex: ['#C81E5B'], fact: 'Found in only a handful of places in the American Southwest. One estimate: one red beryl for every 150,000 diamonds.' },
-  { from: 19, name: 'Taaffeite',     hex: ['#B58BD1'], fact: 'The only gem first identified from an already-cut stone: Richard Taaffe spotted it in a Dublin jeweler\'s shop in 1945.' },
-  { from: 21, name: 'Painite',       hex: ['#C8502A'], fact: 'Found near Mogok, Myanmar, in the 1950s. Until late 2004, only two had ever been cut into gems.' },
-  { from: 25, name: 'Kyawthuite',    hex: ['#E8672A'], fact: 'Only one specimen is known: a single crystal of about a third of a gram, found near Mogok, Myanmar, and kept at the Natural History Museum of Los Angeles County.' },
+  { from: 3,  name: 'Quartz',        hex: ['#C9DCE6'], fact: 'The second most common mineral in the outer Earth, about 12% of it by mass.' },
+  { from: 5,  name: 'Amethyst',      hex: ['#9B59D0'], fact: 'Purple quartz. The color comes from traces of iron, changed by natural radiation inside the rock.' },
+  { from: 7,  name: 'Garnet',        hex: ['#9A1F33'], fact: 'A mine in the Adirondack Mountains of New York yields the largest single garnet crystals in the world, up to 35 cm across.' },
+  { from: 10, name: 'Topaz',         hex: ['#E8A33D'], fact: 'Number 8 on the 10-step scale of scratch hardness. It scratches quartz; only corundum and diamond scratch it.' },
+  { from: 13, name: 'Diamond',       hex: ['#DCEFFF'], fact: 'Not rare at all: about 130 million carats are mined every year. Most formed 150 to 250 km underground, 1 to 3.5 billion years ago.' },
+  { from: 16, name: 'Opal',          hex: ['#9FE3E0', '#F3B6E0', '#FFE59E', '#B9C8FF'], fact: 'Not a crystal at all, and about 6 to 10% water. Australia has been credited with roughly 95% of the precious opal ever mined.' },
+  { from: 19, name: 'Emerald',       hex: ['#1E9E5A'], fact: 'Green beryl, colored by a trace of chromium. Colombia has long been the largest producer.' },
+  { from: 22, name: 'Ruby',          hex: ['#C4122F'], fact: 'Red corundum: the same mineral as sapphire, made red by a trace of chromium. The Mogok Valley in Myanmar was the main source for centuries.' },
+  { from: 25, name: 'Alexandrite',   hex: ['#2E8B6A', '#A0284B'], fact: 'Green in daylight, red under a lamp bulb. Fine color-changing stones are extremely rare.' },
+  { from: 28, name: 'Benitoite',     hex: ['#3557D6'], fact: 'California\'s state gem since 1985. Gem-quality crystals have come from only one mine, in San Benito County.' },
+  { from: 31, name: 'Grandidierite', hex: ['#3FB3A9'], fact: 'Blue-green, first found in 1902 in southern Madagascar. Large clear stones are extremely rare.' },
+  { from: 34, name: 'Red beryl',     hex: ['#C81E5B'], fact: 'Found in only a handful of places in the American Southwest. One estimate: one red beryl for every 150,000 diamonds.' },
+  { from: 37, name: 'Taaffeite',     hex: ['#B58BD1'], fact: 'The only gem first identified from an already-cut stone: Richard Taaffe spotted it in a Dublin jeweler\'s shop in 1945.' },
+  { from: 40, name: 'Painite',       hex: ['#C8502A'], fact: 'Found near Mogok, Myanmar, in the 1950s. Until late 2004, only two had ever been cut into gems.' },
+  { from: 45, name: 'Kyawthuite',    hex: ['#E8672A'], fact: 'Only one specimen is known: a single crystal of about a third of a gram, found near Mogok, Myanmar, and kept at the Natural History Museum of Los Angeles County.' },
 ];
 
 /** The rank a level (0-based index) belongs to. */
@@ -1410,7 +2070,7 @@ function colorsPairable(a, b) {
 function dualUnlocked(levelIndex) { return (levelIndex + 1) >= CONFIG.DUAL_UNLOCK_LEVEL; }
 
 /** The SLASH gesture unlocks partway through the campaign (see DECISIONS.md). */
-const SLASH_UNLOCK_LEVEL = 4;      // 1-based
+const SLASH_UNLOCK_LEVEL = unlockLevel('slash');      // 1-based
 function slashUnlocked(levelIndex) { return (levelIndex + 1) >= SLASH_UNLOCK_LEVEL; }
 const DEFAULT_RUN_LEVELS = LEVELS.length;
 
@@ -1425,6 +2085,7 @@ function levelAt(i) {
   return Object.assign({}, base, {
     targetObjects: Math.min(40, Math.round(base.targetObjects * Math.pow(1.1, extra))),
     quotaPer: (base.quotaPer || 24) + 2 * extra,
+    minRounds: (base.minRounds || CONFIG.LEVEL_MIN_ROUNDS) + extra * CONFIG.LEVEL_MIN_ROUNDS_STEP,
     newText: ['Endless: +10% objects', 'Gate quota +2 per kind'],
   });
 }
@@ -2394,7 +3055,7 @@ function recordBest(run) {
 
 function resetAll() {
   memSettings = null; memBest = null;
-  try { localStorage.removeItem(SETTINGS_KEY); localStorage.removeItem(BEST_KEY); localStorage.removeItem(LESSON_KEY); } catch (e) {}
+  try { localStorage.removeItem(SETTINGS_KEY); localStorage.removeItem(BEST_KEY); localStorage.removeItem(LESSON_KEY); localStorage.removeItem(CAMPAIGN_KEY); } catch (e) {}
 }
 
 // ---- The lesson flag ------------------------------------------------------
@@ -2402,6 +3063,18 @@ function resetAll() {
 // decides the shape of the front page: a newcomer sees one big button that
 // teaches the game; everyone else sees the full menu.
 const LESSON_KEY = 'tapboom.lesson.v1';
+
+// ---- Campaign progress ----------------------------------------------------
+// The ladder is long, so a run picks up where the last one stopped: level,
+// rounds already played on it, and the gate tallies so far.
+const CAMPAIGN_KEY = 'tapboom.campaign.v2';
+function loadCampaign() {
+  const raw = read(CAMPAIGN_KEY);
+  if (!raw) return null;
+  try { const c = JSON.parse(raw); return c && typeof c.level === 'number' ? c : null; } catch (e) { return null; }
+}
+function saveCampaign(c) { write(CAMPAIGN_KEY, JSON.stringify(c)); }
+function clearCampaign() { try { localStorage.removeItem(CAMPAIGN_KEY); } catch (e) {} }
 
 function lessonDone() { return read(LESSON_KEY) === '1'; }
 function setLessonDone() { write(LESSON_KEY, '1'); }
@@ -3120,6 +3793,9 @@ function drawHub(ctx, cx, cy, r, hub, view) {
   ctx.strokeStyle = dark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.18)';
   ctx.stroke();
 
+  // The level's gem, faint, filling from the bottom as the level nears its end.
+  if (hub.progress >= 0 && hub.gem) drawProgressGem(ctx, cx, cy, r, hub.progress, hub.gem, dark);
+
   // The rule word. Small: the ground already says it in lightness, and this is
   // the belt-and-braces reading for anyone who wants the word.
   ctx.font = '800 ' + Math.round(r * 0.13) + 'px ui-rounded, "Segoe UI", system-ui, sans-serif';
@@ -3174,6 +3850,40 @@ function drawHub(ctx, cx, cy, r, hub, view) {
     ctx.globalAlpha = 1;
   }
 
+  ctx.restore();
+}
+
+/**
+ * The progress gem: the brilliant-cut outline of the current rank's stone,
+ * sized to the hub, with its colour rising from the bottom as the level fills.
+ * Kept faint so the rule drawn over it always wins.
+ */
+function drawProgressGem(ctx, cx, cy, r, progress, hexes, dark) {
+  const s = r * 0.82, oy = cy - s * 0.15;
+  const P = (x, y) => [cx + x * s, oy + y * s];
+  const top = -0.55, girdle = -0.12, tip = 0.85;
+  const pts = [P(-0.55, top), P(0.55, top), P(1, girdle), P(0, tip), P(-1, girdle)];
+  const path = () => { ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath(); };
+  const y0 = oy + top * s, y1 = oy + tip * s;
+  let fill = hexes[0];
+  if (hexes.length > 1) {
+    const g = ctx.createLinearGradient(cx - s, y0, cx + s, y1);
+    hexes.forEach((c, i) => g.addColorStop(i / (hexes.length - 1), c));
+    fill = g;
+  }
+  ctx.save();
+  path();
+  ctx.globalAlpha = dark ? 0.10 : 0.07; ctx.fillStyle = fill; ctx.fill();
+  ctx.clip();
+  const level = y1 - (y1 - y0) * Math.max(0, Math.min(1, progress));
+  ctx.globalAlpha = dark ? 0.42 : 0.34; ctx.fillStyle = fill;
+  ctx.fillRect(cx - s - 2, level, s * 2 + 4, y1 - level + 2);
+  ctx.restore();
+  ctx.save();
+  path();
+  ctx.globalAlpha = dark ? 0.30 : 0.22; ctx.lineWidth = Math.max(1.5, r * 0.018); ctx.lineJoin = 'round';
+  ctx.strokeStyle = dark ? '#FFFFFF' : '#17171B'; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(P(-1, girdle)[0], P(-1, girdle)[1]); ctx.lineTo(P(1, girdle)[0], P(1, girdle)[1]); ctx.stroke();
   ctx.restore();
 }
 
@@ -4175,9 +4885,29 @@ function writeLocal(v) {
 class Ladder {
   constructor() {
     this.db = null;
-    this.mode = 'local';       // 'shared' once db answers
+    this.mode = 'local';       // 'shared' once db answers; 'account' on lucidlux.fyi
     this.ready = false;
     this.lastError = null;
+    this.acct = null;          // set by the page when the Lucid Lux account script is present
+    this.youId = '';
+  }
+
+  /** A row from the account boards, shaped like every other ladder row. */
+  accountRow(r) {
+    return {
+      id: r.is_me ? this.youId : 'n' + r.number,
+      callsign: r.name, number: r.number, cpu: false,
+      avatarShape: r.avatar_shape, avatarColor: r.avatar_color, avatarImage: null,
+      score: r.score, accuracy: r.accuracy, combo: r.combo,
+      at: r.at ? Date.parse(r.at) : 0,
+    };
+  }
+
+  /** This device's own unsaved result for a round, so a guest still sees themself. */
+  localOwn(roundId) {
+    const bucket = readLocal()[roundId] || {};
+    const mine = bucket[this.youId];
+    return mine ? [Object.assign({ cpu: false, guest: true }, mine)] : [];
   }
 
   /**
@@ -4187,6 +4917,7 @@ class Ladder {
   async open() {
     if (this.ready) return this.mode;
     this.ready = true;
+    if (this.acct) { this.mode = 'account'; return this.mode; }
     try {
       if (typeof window !== 'undefined' && window.claude && typeof window.claude.use === 'function') {
         const db = await window.claude.use('db');
@@ -4270,6 +5001,14 @@ class Ladder {
   /** The ranked field for a round: real entries plus labelled pace-setters. */
   async board(roundId) {
     let people = [];
+    if (this.mode === 'account' && this.acct) {
+      const rows = await this.acct.dailyBoard(roundId, BOARD_LIMIT);
+      if (rows) {
+        people = rows.map((r) => this.accountRow(r));
+        if (!this.acct.player) people = people.concat(this.localOwn(roundId));
+        return rank(people.concat(paceSetters(roundId)));
+      }
+    }
     if (this.isShared) {
       try {
         const snap = await this.db.collection('rounds/' + roundId + '/scores')
@@ -4317,6 +5056,15 @@ class Ladder {
   /** All-time board. Local mode shows your own bests against the all-time pace-setters. */
   async hallOfFame(localCard, localBest) {
     let rows = [];
+    if (this.mode === 'account' && this.acct) {
+      const got = await this.acct.hallOfFame(BOARD_LIMIT);
+      if (got) {
+        rows = got.map((r) => Object.assign(this.accountRow(r), { best: r.score }));
+        if (!this.acct.player && localCard && localBest > 0) {
+          rows.push(Object.assign({ cpu: false, guest: true, score: localBest, best: localBest }, localCard));
+        }
+      }
+    }
     if (this.isShared) {
       try {
         const snap = await this.db.collection('hof').orderBy('best', 'desc').limit(BOARD_LIMIT).get();
@@ -4905,6 +5653,29 @@ function renderBadges(wrapEl, earnedKeys) {
   }
 }
 
+/**
+ * Signed in: the account's badge catalog (earned or not), followed by the two
+ * shop badges, which only ever live on the device that holds the coins.
+ */
+function renderAccountBadges(wrapEl, rows, localEarned) {
+  wrapEl.innerHTML = '';
+  for (const r of rows) {
+    const chip = elt('span', 'badge' + (r.earned_at ? ' got' : ''));
+    chip.appendChild(elt('b', null, r.name));
+    chip.appendChild(elt('i', null, r.hint));
+    chip.title = r.hint;
+    wrapEl.appendChild(chip);
+  }
+  for (const key of ['rich', 'collector']) {
+    const b = badgeByKey(key);
+    if (!b) continue;
+    const chip = elt('span', 'badge' + (localEarned.indexOf(key) !== -1 ? ' got' : ''));
+    chip.appendChild(elt('b', null, b.label));
+    chip.appendChild(elt('i', null, b.hint + ' (this device)'));
+    wrapEl.appendChild(chip);
+  }
+}
+
 const KIND_LABEL = { sound: 'Tap sounds', error: 'Miss sound', sting: 'Round end', scheme: 'Colour scheme', frame: 'Avatar frame' };
 
 function renderShop(wrapEl, wallet, handlers) {
@@ -5193,6 +5964,9 @@ class Game {
     this.roundStartScore = 0;
     this.roundStartCorrect = 0;
     this.roundStartWrong = 0;
+    this.roundBestCombo = 0;
+    this.roundStartWall = Date.now();
+    this.runStartWall = Date.now();       // wall clock, for the account's plausibility check
     this.areaFrom = LEVELS[0].areaFraction;
     this.areaTo = LEVELS[0].areaFraction;
     this.areaT = 1;
@@ -5227,8 +6001,50 @@ class Game {
   startRun() {
     this.reset();
     this.gameMode = 'campaign';
-    this.level = levelAt(0);
-    this.beginLevel(0);
+    const saved = loadCampaign();
+    const idx = saved ? Math.max(0, saved.level | 0) : 0;
+    this.level = levelAt(idx);
+    this.beginLevel(idx);
+    if (saved) {
+      this.round = Math.max(0, saved.rounds | 0);
+      const q = this.quota;
+      if (q && saved.quota && saved.quota.need === q.need &&
+          saved.quota.shapes.length === q.shapes.length && saved.quota.colors.length === q.colors.length) {
+        q.shapes = saved.quota.shapes.slice(); q.colors = saved.quota.colors.slice(); q.version++;
+      }
+      this.cardsSeen = !!saved.seen;
+      this.saveProgress();
+      // Coming back to a level already introduced: straight into play.
+      if (this.cardsSeen) this.skipCard();
+    }
+  }
+
+  /** Where the campaign stands, written after every round and level change. */
+  saveProgress() {
+    if (this.gameMode !== 'campaign' || this.inLesson) return;
+    const q = this.quota;
+    saveCampaign({ level: this.levelIndex, rounds: this.round, seen: !!this.cardsSeen,
+      quota: q ? { need: q.need, shapes: q.shapes.slice(), colors: q.colors.slice() } : null, at: Date.now() });
+  }
+
+  /** How far toward the next level: the lesser of the gate tally and the rounds played. */
+  levelProgress() {
+    if (this.gameMode !== 'campaign' || this.inLesson || !this.quota || !this.level) return -1;
+    const q = quotaProgress(this.quota);
+    const need = this.level.minRounds || 1;
+    let inRound = 0;
+    if (this.phase === 'playing') {
+      const len = roundSecondsFor(this.level, this.round) * 1000;
+      inRound = clamp(1 - this.roundMs / len, 0, 1);
+    } else if (this.phase === 'intermission' || this.phase === 'results') inRound = 1;
+    const r = Math.min(1, (this.round + inRound) / need);
+    return Math.min(q, r);
+  }
+
+  /** Rounds still owed on this level, counting the one in play as done. */
+  roundsOwed() {
+    const need = (this.level && this.level.minRounds) || 1;
+    return Math.max(0, need - (this.round + 1));
   }
 
   /**
@@ -5383,11 +6199,17 @@ class Game {
     this.pending = this.rollRule(true);
     this.phase = 'levelcard';
     this.phaseTimer = LEVEL_CARD_MS;
+    this.cardsSeen = false;
+    this.saveProgress();
     this.emit('onPhase');
   }
 
   skipCard() {
-    if (this.phase === 'levelcard') { this.areaT = 1; this.phaseTimer = 0; this.startRound(); }
+    if (this.phase === 'levelcard') {
+      this.areaT = 1; this.phaseTimer = 0;
+      if (!this.cardsSeen) { this.cardsSeen = true; this.saveProgress(); }
+      this.startRound();
+    }
   }
 
   startRound() {
@@ -5397,6 +6219,8 @@ class Game {
     this.roundStartScore = this.score;
     this.roundStartCorrect = this.correctTaps;
     this.roundStartWrong = this.wrongTaps;
+    this.roundBestCombo = 0;
+    this.roundStartWall = Date.now();
     this.combo = 0;
     this.pieces.clear();
     this.particles.clear();
@@ -5433,7 +6257,8 @@ class Game {
    */
   endRound() {
     const acc = accuracyPct(this.correctTaps - this.roundStartCorrect, this.wrongTaps - this.roundStartWrong);
-    const cleared = this.gameMode === 'daily' || quotaMet(this.quota);
+    const roundsOk = this.gameMode === 'daily' || this.inLesson || (this.round + 1) >= ((this.level && this.level.minRounds) || 1);
+    const cleared = this.gameMode === 'daily' || (quotaMet(this.quota) && roundsOk);
     const lastLevel = this.gameMode === 'daily' || this.levelIndex + 1 >= this.runLevels;
     const remaining = quotaRemaining(this.quota);
     this.roundSummary = {
@@ -5449,7 +6274,14 @@ class Game {
       quotaColorsShort: remaining.colorsShort,
       quotaTotalShort: remaining.total,
       quotaProgress: quotaProgress(this.quota),
+      quotaMet: quotaMet(this.quota),
+      roundsOwed: this.roundsOwed(),
+      minRounds: (this.level && this.level.minRounds) || 1,
       combo: this.bestCombo,
+      roundCombo: this.roundBestCombo,
+      roundCorrect: this.correctTaps - this.roundStartCorrect,
+      roundWrong: this.wrongTaps - this.roundStartWrong,
+      roundMs: Date.now() - this.roundStartWall,
       gameMode: this.gameMode,
     };
     if (this.gameMode === 'daily') {
@@ -5462,6 +6294,15 @@ class Game {
     this.roundSummary.nextRule = describeRule({ shapes: this.pending.shapes, colors: this.pending.colors }, this.pending.mode);
     this.roundSummary.nextMode = this.pending.mode;
     if (this.audio) this.audio.sting(this.roundSummary.roundScore >= 0);
+
+    // Remember where we are: the next level if this one is done, else the next round here.
+    if (this.gameMode === 'campaign' && !this.inLesson) {
+      const q = this.quota;
+      saveCampaign(cleared
+        ? { level: this.levelIndex + 1, rounds: 0, seen: false, quota: null, at: Date.now() }
+        : { level: this.levelIndex, rounds: this.round + 1, seen: true,
+            quota: q ? { need: q.need, shapes: q.shapes.slice(), colors: q.colors.slice() } : null, at: Date.now() });
+    }
 
     if (cleared && lastLevel) {
       this.runCleared = true;
@@ -5493,7 +6334,9 @@ class Game {
     quotaCredit(this.quota, p);
     if (!this.gateOpen && quotaMet(this.quota)) {
       this.gateOpen = true;
-      this.floater(this.hubX, this.rect.y + this.rect.h * 0.22, CONFIG.GATE_OPEN_LABEL,
+      const owed = this.roundsOwed();
+      this.floater(this.hubX, this.rect.y + this.rect.h * 0.22,
+        owed > 0 ? 'QUOTA MET · ' + owed + (owed === 1 ? ' MORE ROUND' : ' MORE ROUNDS') : CONFIG.GATE_OPEN_LABEL,
         this.dark ? '#FFE87A' : '#B8860B', Math.round(clamp(this.screenShort * 0.06, 20, 34)));
       if (this.audio) this.audio.chime();
       this.emit('onGateOpen');
@@ -6210,6 +7053,7 @@ class Game {
     if (verdict === 'correct') {
       this.combo++;
       if (this.combo > this.bestCombo) this.bestCombo = this.combo;
+      if (this.combo > this.roundBestCombo) this.roundBestCombo = this.combo;
       this.lastTapMs = this.timeMs;
       this.celebrateCombo();
       if (!this.inLesson) {
@@ -6258,6 +7102,7 @@ class Game {
     const fam = familyTotals(p.gen, this.level.explodeDepth);
     this.combo++;
     if (this.combo > this.bestCombo) this.bestCombo = this.combo;
+    if (this.combo > this.roundBestCombo) this.roundBestCombo = this.combo;
     this.lastTapMs = this.timeMs;
     const pts = Math.round(fam.points * comboMultiplier(this.combo) * (this.fx.double > 0 ? 2 : 1));
     this.score += pts;
@@ -6866,6 +7711,8 @@ class Game {
       drain: drain === null ? 0 : drain,
       drainKind: nc ? nc.kind : 'indicator',
       grace: this.grace.ms > 0 ? this.grace.ms / CONFIG.GRACE_MS : 0,
+      progress: this.levelProgress(),
+      gem: this.gameMode === 'campaign' && !this.inLesson ? mineralFor(this.levelIndex).hex : null,
     }, view);
   }
 
@@ -6971,6 +7818,132 @@ party.reduceMotion = !!settings.reduceMotion;
 let lastDailyResult = null;
 let boardCache = { roundId: '', rows: [] };
 let tickets = loadTickets();
+
+// ------------------------------------------------------------- accounts
+// Present only where the shared Lucid Lux account script is loaded (the
+// lucidlux.fyi build). Everywhere else `acct` is null and nothing here runs.
+// A guest loses nothing: every number below still lives on this device first.
+
+const acct = (typeof window !== 'undefined' && window.LucidLuxAccount)
+  ? window.LucidLuxAccount.create({ game: 'tapboom' })
+  : null;
+const SYNC_KEYS = [WALLET_KEY, SETTINGS_KEY, BEST_KEY, LESSON_KEY, CAMPAIGN_KEY, HISTORY_KEY, TICKETS_KEY];
+
+function collectSave() {
+  const keys = {};
+  for (const k of SYNC_KEYS) {
+    let v = null;
+    try { v = JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { v = null; }
+    keys[k] = v;
+  }
+  const idn = loadIdentity();
+  return { v: 1, game: 'tapboom', version: VERSION, keys, avatar: [idn.avatarShape | 0, idn.avatarColor | 0] };
+}
+
+/** One number per saved state, so two copies can be compared: level, then rounds. */
+function saveProgress(st) {
+  if (!st || !st.keys) return 0;
+  const c = st.keys[CAMPAIGN_KEY] || {};
+  const h = st.keys[HISTORY_KEY] || {};
+  const played = h.counts ? Math.min(999, h.counts.roundsPlayed | 0) : 0;
+  return (c.level | 0) * 1e6 + (c.rounds | 0) * 1e3 + played;
+}
+
+function applySave(st) {
+  if (!st || !st.keys) return;
+  for (const k of SYNC_KEYS) {
+    try {
+      if (st.keys[k] === null || st.keys[k] === undefined) localStorage.removeItem(k);
+      else localStorage.setItem(k, JSON.stringify(st.keys[k]));
+    } catch (e) { /* private mode */ }
+  }
+  if (Array.isArray(st.avatar)) updateIdentity({ avatarShape: st.avatar[0] | 0, avatarColor: st.avatar[1] | 0 });
+  try { sessionStorage.setItem('tapboom.synced', '1'); } catch (e) {}
+  location.reload();
+}
+
+let toastTimer = 0;
+function acctToast(text, ms) {
+  const t = $('acctToast');
+  if (!t) return;
+  t.textContent = text;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, ms || 3200);
+}
+
+function acctName() {
+  const p = acct && acct.player;
+  return p ? p.name + ' #' + String(p.number || 0).padStart(4, '0') : '';
+}
+
+/** Show a guest the way in, at the moments progress is worth keeping. */
+function acctNudgeVisible() {
+  return !!acct && !acct.signedIn && !acct.under13;
+}
+
+function openAccount() {
+  if (!acct) return;
+  const idn = loadIdentity();
+  acct.open({ avatar: [idn.avatarShape | 0, idn.avatarColor | 0] });
+}
+
+/** Record one finished round, daily or run with the account, and announce new badges. */
+function acctSubmit(run) {
+  if (!acct || !acct.signedIn || !acct.player) return Promise.resolve(null);
+  run.version = VERSION;
+  return acct.submitRun(run).then((r) => {
+    if (r && r.ok && r.new_badges && r.new_badges.length) {
+      const names = r.new_badges.map((b) => b.name).join(', ');
+      acctToast((r.new_badges.length === 1 ? 'Badge earned: ' : 'Badges earned: ') + names, 4200);
+      try { kit.chime(); } catch (e) {}
+    }
+    return r;
+  }, () => null);
+}
+
+if (acct) {
+  ladder.acct = acct;
+  acct.useSave({ collect: collectSave, apply: applySave, progress: saveProgress });
+  acct.onSynced = (how) => {
+    if (how === 'uploaded') acctToast('Your progress is saved to your account.');
+    refreshMenuChrome();
+  };
+  acct.on(() => { if (current === 'menu') refreshMenuChrome(); syncAcctChrome(); });
+  try {
+    if (sessionStorage.getItem('tapboom.synced')) {
+      sessionStorage.removeItem('tapboom.synced');
+      setTimeout(() => acctToast('Progress loaded from your account.'), 600);
+    }
+  } catch (e) {}
+}
+ladder.youId = identity.id;
+
+/** The account bits of the menu, profile and result screens. */
+function syncAcctChrome() {
+  const box = $('acctBox');
+  if (!acct) { if (box) box.hidden = true; return; }
+  if (box) {
+    box.hidden = false;
+    const line = $('acctLine'), btn = $('btnAccount');
+    if (acct.player) {
+      line.textContent = 'Signed in as ' + acct.player.name + '. Progress, scores and badges are saved to your account.';
+      btn.textContent = 'Account';
+      btn.classList.remove('primary');
+    } else if (acct.under13) {
+      line.textContent = 'Playing as a guest. Your progress is saved on this device.';
+      btn.textContent = 'About accounts';
+      btn.classList.remove('primary');
+    } else {
+      line.textContent = 'Playing as a guest. Sign in to keep your level and badges, play on any device, and join the boards.';
+      btn.textContent = acct.signedIn ? 'Finish signing in' : 'Save my progress';
+      btn.classList.add('primary');
+    }
+  }
+  const rs = $('btnRsSave'), dr = $('btnDrSave');
+  if (rs) rs.hidden = !acctNudgeVisible();
+  if (dr) dr.hidden = !acctNudgeVisible();
+}
 
 // ------------------------------------------------------------- fx bars
 
@@ -7263,8 +8236,8 @@ function levelCards(g) {
   if (P && L.areaFraction >= 1 && P.areaFraction < 1) cards.push({ kind: 'Bigger board', title: 'Full screen',
     body: 'The board now fills the whole screen. Watch the edges too.', draw: LC.board() });
   if (idx >= LEVELS.length) (L.newText || []).forEach((t) => cards.push({ kind: 'Endless', title: t, body: '', draw: null }));
-  if (g.quota) cards.push({ kind: 'The gate', title: g.quota.need + ' of each',
-    body: 'Pop every shape and color in the strip at the top ' + g.quota.need + ' times to open the way to level ' + (idx + 2) + '. Only right taps count.',
+  if (g.quota) cards.push({ kind: 'The gate', title: g.quota.need + ' of each, ' + (L.minRounds || 1) + ' rounds',
+    body: 'Pop every shape and color in the strip at the top ' + g.quota.need + ' times, and play at least ' + (L.minRounds || 1) + ' rounds, to open the way to level ' + (idx + 2) + '. The gem behind the panel fills as you go. Only right taps count.',
     draw: LC.gate(g.quota) });
   return cards;
 }
@@ -7495,6 +8468,13 @@ function showIntermission() {
     kind: 'campaign', score: s.roundScore, accuracy: s.accuracy, combo: game.bestCombo,
     level: s.level, round: s.round, placement: 0, fieldSize: 0, coins: 0,
   });
+  if (acct && !game.inLesson) {
+    acctSubmit({
+      kind: 'round', score: s.roundScore, accuracy: s.accuracy, combo: s.roundCombo || 0,
+      level: s.level, correct: s.roundCorrect || 0, wrong: s.roundWrong || 0, durationMs: s.roundMs || 0,
+    });
+    acct.push();
+  }
 
   if (s.levelCleared) {
     el.imTitle.textContent = 'Level ' + s.level + ' complete';
@@ -7518,11 +8498,14 @@ function showIntermission() {
 function gateLine(s) {
   if (!s.quotaNeed) return '';
   if (s.levelCleared) return 'Gate open — on to level ' + (s.level + 1);
+  const owed = s.roundsOwed || 0;
+  const more = owed + (owed === 1 ? ' more round' : ' more rounds');
+  if (s.quotaMet) return 'Quota met · ' + more + ' on this level';
   const parts = [];
   if (s.quotaShapesShort) parts.push(s.quotaShapesShort + (s.quotaShapesShort === 1 ? ' shape' : ' shapes'));
   if (s.quotaColorsShort) parts.push(s.quotaColorsShort + (s.quotaColorsShort === 1 ? ' colour' : ' colours'));
   const pct = Math.round((s.quotaProgress || 0) * 100);
-  return 'Gate shut · ' + parts.join(' and ') + ' still short · ' + pct + '% there';
+  return 'Gate shut · ' + parts.join(' and ') + ' still short · ' + pct + '% there' + (owed > 0 ? ' · at least ' + more : '');
 }
 
 function ticketSummary() {
@@ -7561,6 +8544,13 @@ function finishRun() {
   const finished = !!game.runCleared;
   const best = recordBest(s);
   recordRunHistory(s, finished);
+  if (acct) {
+    acctSubmit({
+      kind: 'run', score: s.score, accuracy: s.accuracy, combo: s.combo, level: s.level,
+      correct: s.correct, wrong: s.wrong, durationMs: Date.now() - (game.runStartWall || Date.now()), finished,
+    });
+    acct.push();
+  }
 
   const coins = campaignCoins(game.levelIndex + (finished ? 1 : 0), finished);
   if (coins > 0) wallet = credit(coins, finished ? 'Campaign complete' : 'Campaign progress');
@@ -7584,6 +8574,7 @@ function finishRun() {
   el.rsCoins.hidden = coins <= 0;
   el.rsCoins.textContent = '◎ +' + coins + (coins === 1 ? ' coin' : ' coins');
   el.bestLine.textContent = 'Best: ' + fmt(best.best.score) + ' · level ' + best.best.level;
+  syncAcctChrome();
   showScreen('results');
   countUp(el.rsScore, s.score, 1100);
   bumpIn(el.rsPraise, best.isNewHigh ? 'slam' : 'pop-in');
@@ -7625,9 +8616,16 @@ async function finishDaily() {
   el.drCoins.textContent = '◎ …';
   el.drBoard.innerHTML = '';
   renderLines(el.drLines, []);
+  syncAcctChrome();
   showScreen('dailyresult');
   countUp(el.drScore, s.score, 1000);
 
+  if (acct) {
+    await acctSubmit({
+      kind: 'daily', roundId, score: s.score, accuracy: s.accuracy, combo: s.combo, level: 0,
+      correct: s.correct, wrong: s.wrong, durationMs: Date.now() - (game.roundStartWall || Date.now()),
+    });
+  }
   await ladder.submit(roundId, card, { score: s.score, accuracy: s.accuracy, combo: s.combo });
   const rows = await ladder.board(roundId);
   boardCache = { roundId, rows };
@@ -7662,6 +8660,7 @@ async function finishDaily() {
   bumpIn(el.drPraise);
   celebrate(praise.tier, coins, el.drCoins);
   refreshMenuChrome();
+  if (acct) acct.push();
 }
 
 // ------------------------------------------------------------- chrome
@@ -7669,7 +8668,7 @@ async function finishDaily() {
 function refreshMenuChrome() {
   wallet = loadWallet();
   tickets = loadTickets();
-  el.menuName.textContent = displayName(identity);
+  el.menuName.textContent = acctName() || displayName(identity);
   el.menuCoins.textContent = '◎ ' + wallet.coins;
   el.menuTickets.textContent = '◈ ' + tickets.tickets;
   el.menuTickets.classList.toggle('empty', roundsAvailable(tickets) <= 0);
@@ -7680,7 +8679,8 @@ function refreshMenuChrome() {
   const played = h.streak.lastDay === dayKey();
   el.menuSub.textContent = played
     ? 'Played today · ' + h.streak.days + '-day streak'
-    : 'Tap to edit your profile';
+    : (acct && acct.player ? 'Saved to your account'
+      : (acctNudgeVisible() ? 'Guest · tap to save your progress' : 'Tap to edit your profile'));
   const freeToday = freeDailyAvailable(tickets, dailyId());
   el.dailyState.textContent = freeToday
     ? 'One 60-second round · free today · everyone plays the same board'
@@ -7688,6 +8688,17 @@ function refreshMenuChrome() {
               : 'One 60-second round · costs a round');
   const b = loadBest();
   el.bestLine.textContent = 'Best: ' + fmt(b.score) + (b.level ? ' · level ' + b.level : '');
+  const camp = loadCampaign();
+  const going = !!camp && (camp.level > 0 || camp.rounds > 0);
+  const pt = document.getElementById('playTitle'), ps = document.getElementById('playSub');
+  if (pt && ps) {
+    pt.textContent = going ? 'Continue' : 'Play';
+    ps.textContent = going
+      ? 'Level ' + (camp.level + 1) + ' \u00B7 ' + mineralFor(camp.level).name + ' \u00B7 round ' + (camp.rounds + 1)
+      : 'Start at level 1. One new thing at each level.';
+  }
+  const so = document.getElementById('btnStartOver');
+  if (so) so.hidden = !going;
   syncMenuShape();
 }
 
@@ -7714,6 +8725,7 @@ function toMenu() {
   setTheme(false);
   refreshMenuChrome();
   showScreen('menu');
+  if (acct) acct.push();
 }
 
 function startAmbient() {
@@ -7733,6 +8745,11 @@ function startAmbient() {
 // --------------------------------------------------------- meta screens
 
 function netNote() {
+  if (ladder.mode === 'account') {
+    return acct && acct.player
+      ? 'Live board: players on every device. CPU entries set the pace.'
+      : 'Live board. Sign in to put your own scores on it; until then yours shows only here. CPU entries set the pace.';
+  }
   return ladder.isShared
     ? 'Live board — everyone who can open this page shares it.'
     : 'Offline board — your results are stored on this device. CPU entries set the pace.';
@@ -7768,10 +8785,10 @@ function openProfile() {
   wallet = loadWallet();
   const h = loadHistory();
   const stats = badgeStats(wallet);
-  el.profName.textContent = displayName(identity);
-  el.profMeta.textContent = identity.numberClaimed
-    ? 'Player ' + String(identity.number).padStart(4, '0')
-    : 'Player number pending';
+  el.profName.textContent = acctName() || displayName(identity);
+  el.profMeta.textContent = acct && acct.player
+    ? 'Player ' + String(acct.player.number).padStart(4, '0') + ' · Lucid Lux account'
+    : (identity.numberClaimed ? 'Player ' + String(identity.number).padStart(4, '0') : (acct ? 'Guest' : 'Player number pending'));
   drawAvatar(el.profAvatar, identity, wallet.equipped.frame);
   el.pfCoins.textContent = String(wallet.coins);
   el.pfTickets.textContent = String(tickets.tickets);
@@ -7783,7 +8800,15 @@ function openProfile() {
   renderBadges(el.pfBadges, earnedBadges(stats));
   renderHistory(el.pfHistory, recentRounds(null, 10));
   renderLedger(el.pfLedger, wallet);
+  syncAcctChrome();
   showScreen('profile');
+  // Signed in: the account's badges are the record; the shop's two stay local.
+  if (acct && acct.player) {
+    acct.badges().then((rows) => {
+      if (!rows || current !== 'profile') return;
+      renderAccountBadges(el.pfBadges, rows, earnedBadges(stats));
+    });
+  }
 }
 
 function openShop() {
@@ -7830,6 +8855,11 @@ function openShop() {
 
 $('btnDaily').addEventListener('click', startDaily);
 $('btnPlay').addEventListener('click', () => { kit.unlock(); startRun(); });
+$('btnStartOver').addEventListener('click', () => {
+  if (!window.confirm('Start over from level 1? Your current level and its progress will be cleared. Scores and coins stay.')) return;
+  clearCampaign();
+  refreshMenuChrome();
+});
 el.btnLesson.addEventListener('click', startLesson);
 el.btnMore.addEventListener('click', () => { menuExpanded = true; syncMenuShape(); });
 el.lessonNext.addEventListener('click', () => {
@@ -7850,10 +8880,17 @@ $('btnBsBack').addEventListener('click', () => showScreen('menu'));
 $('btnHofBack').addEventListener('click', () => showScreen('menu'));
 $('btnProfBack').addEventListener('click', () => showScreen('menu'));
 $('btnShopBack').addEventListener('click', () => showScreen('menu'));
+$('btnAccount').addEventListener('click', openAccount);
+$('btnRsSave').addEventListener('click', openAccount);
+$('btnDrSave').addEventListener('click', openAccount);
 $('btnDrRetry').addEventListener('click', startDaily);
 $('btnDrBoard').addEventListener('click', openBoard);
 $('btnDrMenu').addEventListener('click', toMenu);
 $('btnResetScores').addEventListener('click', () => {
+  if (acct && acct.signedIn) {
+    if (!window.confirm('Reset this device? You will be signed out here first, so your account keeps its progress. Sign in again any time to bring it back.')) return;
+    acct.signOut();
+  }
   resetAll(); resetWallet(); resetHistory(); resetTickets();
   tickets = loadTickets();
   wallet = loadWallet();
@@ -8209,8 +9246,16 @@ requestAnimationFrame(frame);
 
 // Claim a sequential player number in the background — shared counter when the
 // page has one, a local number otherwise. Never blocks play.
+if (acct) {
+  syncAcctChrome();
+  acct.refresh().then(() => {
+    if (acct.player) acct.reconcile().then((how) => { if (how === 'uploaded') refreshMenuChrome(); });
+    refreshMenuChrome();
+  });
+}
+
 (async () => {
-  if (identity.numberClaimed) return;
+  if (identity.numberClaimed || acct) return;
   await ladder.open();
   const res = await ladder.claimNumber(identity.id);
   identity = updateIdentity({ number: res.number, numberClaimed: !res.local });
