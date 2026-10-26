@@ -41,7 +41,7 @@ footer a { color: var(--soft); }
 <body>
 <main>
   <h1>Lucid Lux</h1>
-  <p class="tag">Small, bright games you can play anywhere. No ads. Accounts are optional.</p>
+  <p class="tag">Small, bright games you can play anywhere. No ads. Sign in once to keep your progress and badges across every game.</p>
 
   <section class="game">
     <img src="tapboom-icon.png" alt="TapBoom icon: a red piece inside a rainbow ring">
@@ -93,5 +93,7 @@ footer a { color: var(--soft); }
 
   <footer><a href="key/">Key</a> · <a href="privacy.html">Privacy</a></footer>
 </main>
+<script src="account/lucidlux-account.js"></script>
+<script>LucidLuxAccount.attach({ game: null, button: { dark: true, position: 'top-right' } });</script>
 </body>
 </html>

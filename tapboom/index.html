@@ -605,12 +605,151 @@
     this.reconcile().then(function (how) { if (self.onSynced) self.onSynced(how); });
   };
 
+  /** A finished Batduko cave or Resonant round (TapBoom uses submitRun). */
+  Account.prototype.submitResult = function (r) {
+    var self = this;
+    if (!this.session || !this.player) return Promise.resolve({ ok: false, reason: 'signed_out' });
+    return this.rpc('ll_submit_result', {
+      p_game: this.game, p_kind: r.kind, p_level: r.level | 0, p_score: Math.round(r.score || 0),
+      p_duration_ms: Math.round(r.durationMs || 0), p_won: r.won !== false, p_version: r.version || null,
+    }).then(function (res) {
+      var d = res.ok && res.data ? res.data : { ok: false, reason: res.offline ? 'offline' : 'error' };
+      if (d.ok && d.new_badges && d.new_badges.length && self.me) {
+        d.new_badges.forEach(function (b) { if (self.me.badges.indexOf(b.slug) < 0) self.me.badges.push(b.slug); });
+        self.emit();
+      }
+      return d;
+    });
+  };
+
+  // ------------------------------------------------------------- the button
+  //
+  // One visible way in on every page: "Sign in" for a guest, the player's
+  // name once signed in. Tapping it opens the panel.
+
+  var BTN_CSS = [
+    '.llx-pill{position:fixed;z-index:9000;display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 16px;border-radius:999px;',
+    'font:600 16px/1 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;cursor:pointer;',
+    'background:#FFFFFF;color:#17171B;border:2px solid rgba(23,23,27,.18);box-shadow:0 6px 20px rgba(0,0,0,.28);-webkit-tap-highlight-color:transparent}',
+    '.llx-pill.dark{background:#17161D;color:#F3F1F7;border-color:rgba(243,241,247,.25)}',
+    '.llx-pill .dot{width:10px;height:10px;border-radius:50%;background:#E24B4B;flex:none}',
+    '.llx-pill.in .dot{background:#2BD46B}',
+    '.llx-pill.inline{position:static;box-shadow:none}',
+    '.llx-pill.compact{flex-direction:column;justify-content:center;gap:4px;width:56px;min-height:56px;padding:6px 4px;border-radius:14px;font-size:11px;line-height:1.1;text-align:center}',
+    '.llx-pill.compact span:last-child{max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.llx-toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:9500;',
+    'max-width:min(92vw,420px);padding:12px 16px;border-radius:14px;background:#17171B;color:#FFFFFF;text-align:center;',
+    'font:650 16px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.35);pointer-events:none}',
+  ].join('');
+
+  function ensureCss(id, css) {
+    if (document.getElementById(id)) return;
+    var s = document.createElement('style'); s.id = id; s.textContent = css; document.head.appendChild(s);
+  }
+
+  var POS = {
+    'top-right':    'top:calc(10px + env(safe-area-inset-top,0px));right:calc(10px + env(safe-area-inset-right,0px))',
+    'top-left':     'top:calc(10px + env(safe-area-inset-top,0px));left:calc(10px + env(safe-area-inset-left,0px))',
+    'bottom-right': 'bottom:calc(10px + env(safe-area-inset-bottom,0px));right:calc(10px + env(safe-area-inset-right,0px))',
+    'bottom-left':  'bottom:calc(10px + env(safe-area-inset-bottom,0px));left:calc(10px + env(safe-area-inset-left,0px))',
+    'left-middle':  'top:50%;transform:translateY(-50%);left:calc(8px + env(safe-area-inset-left,0px))',
+  };
+
+  Account.prototype.mountButton = function (opts) {
+    var self = this;
+    opts = opts || {};
+    ensureCss('llx-btn-css', BTN_CSS);
+    var b = h('button', { 'class': 'llx-pill' + (opts.dark ? ' dark' : '') + (opts.into ? ' inline' : '') + (opts.compact ? ' compact' : ''), type: 'button', id: opts.id || null });
+    if (!opts.into) b.setAttribute('style', POS[opts.position || 'top-right'] || POS['top-right']);
+    var dot = h('span', { 'class': 'dot', 'aria-hidden': 'true' });
+    var label = h('span', {});
+    b.appendChild(dot); b.appendChild(label);
+    function paint() {
+      var p = self.player;
+      label.textContent = p ? (opts.compact ? p.name.split(' ')[0] : p.name) : (self.signedIn ? (opts.compact ? 'Finish' : 'Finish signing in') : 'Sign in');
+      b.classList.toggle('in', !!p);
+      b.setAttribute('aria-label', p ? 'Your Lucid Lux account: ' + p.name : 'Sign in or create a Lucid Lux account');
+    }
+    b.addEventListener('click', function (e) { e.stopPropagation(); self.open({ avatar: opts.avatar || [0, 0] }); });
+    ['pointerdown', 'touchstart', 'mousedown'].forEach(function (t) { b.addEventListener(t, function (e) { e.stopPropagation(); }); });
+    this.on(paint);
+    paint();
+    (opts.into || document.body).appendChild(b);
+    this.button = b;
+    return b;
+  };
+
+  Account.prototype.toast = function (text, ms) {
+    ensureCss('llx-btn-css', BTN_CSS);
+    var t = document.getElementById('llx-toast');
+    if (!t) { t = h('div', { id: 'llx-toast', 'class': 'llx-toast', role: 'status', 'aria-live': 'polite' }); document.body.appendChild(t); }
+    t.textContent = text; t.hidden = false;
+    clearTimeout(this._toastT);
+    this._toastT = setTimeout(function () { t.hidden = true; }, ms || 4200);
+  };
+
+  /**
+   * Everything a game needs in one call: the button, save sync over a list of
+   * localStorage keys, and results reported with
+   *   window.dispatchEvent(new CustomEvent('lucidlux:result', { detail: { kind, level, score, durationMs, won } }))
+   */
+  function attach(o) {
+    o = o || {};
+    var a = create({ game: o.game });
+    var keys = o.keys || [];
+    if (keys.length) {
+      a.useSave({
+        collect: function () {
+          var out = {};
+          keys.forEach(function (k) { var v = null; try { v = JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { v = null; } out[k] = v; });
+          return { v: 1, game: o.game, keys: out };
+        },
+        apply: function (st) {
+          keys.forEach(function (k) {
+            try { var v = st && st.keys ? st.keys[k] : null; if (v === null || v === undefined) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch (e) {}
+          });
+          try { sessionStorage.setItem('lucidlux.synced', '1'); } catch (e) {}
+          location.reload();
+        },
+        progress: o.progress || function (st) { return st && st.keys ? JSON.stringify(st.keys).length : 0; },
+      });
+      a.onSynced = function (how) { if (how === 'uploaded') a.toast('Your progress is saved to your account.'); };
+    }
+    try {
+      if (sessionStorage.getItem('lucidlux.synced')) {
+        sessionStorage.removeItem('lucidlux.synced');
+        setTimeout(function () { a.toast('Progress loaded from your account.'); }, 600);
+      }
+    } catch (e) {}
+    if (o.game) {
+      global.addEventListener('lucidlux:result', function (ev) {
+        var d = (ev && ev.detail) || {};
+        a.submitResult({ kind: d.kind, level: d.level, score: d.score, durationMs: d.durationMs, won: d.won, version: o.version })
+          .then(function (r) {
+            if (r && r.ok && r.new_badges && r.new_badges.length) {
+              a.toast((r.new_badges.length === 1 ? 'Badge earned: ' : 'Badges earned: ') + r.new_badges.map(function (b) { return b.name; }).join(', '));
+            }
+            if (keys.length) a.push();
+          });
+      });
+    }
+    if (o.button !== false) {
+      var mount = function () { a.mountButton(o.button || {}); };
+      if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount);
+    }
+    if (a.session) a.refresh().then(function () { if (a.player && keys.length) a.reconcile(); });
+    return a;
+  }
+
+  function create(o) {
+    var a = new Account(o && Object.prototype.hasOwnProperty.call(o, 'game') ? o.game : 'tapboom');
+    if (a.session) a.refresh();
+    return a;
+  }
+
   global.LucidLuxAccount = {
-    create: function (o) {
-      var a = new Account((o && o.game) || 'tapboom');
-      if (a.session) a.refresh();
-      return a;
-    },
+    create: create,
+    attach: attach,
     config: CONFIG,
   };
 })(typeof window !== 'undefined' ? window : this);
@@ -1236,6 +1375,7 @@ body.dark .tickets { color: #9BC8F0; }
 
 
 /* Accounts (lucidlux.fyi only; hidden everywhere else) */
+.btn.signin { border: 2px solid var(--accent); }
 .acctbox { border: 1.5px solid var(--panel-line); border-radius: 14px; padding: 10px 12px; margin: 10px 0 4px; }
 .acctbox p { margin: 0 0 6px; font-size: 14px; color: var(--ink-soft); }
 .acctbox .btn { margin-top: 4px; }
@@ -1297,6 +1437,7 @@ body.dark .tickets { color: #9BC8F0; }
 
       <h1 class="title">Tap<span>Boom</span></h1>
       <p class="tag">Tap what the panel says. Pop everything.</p>
+      <button class="btn big signin" id="btnSignIn" hidden><b>Sign in</b><i>Keep your level and badges on every device</i></button>
 
       <button class="btn primary big" id="btnLesson">
         <b>Learn to play</b>
@@ -4304,7 +4445,8 @@ function attachInput(canvas, handlers) {
 // ---- identity.js -------------------------------------------------
 // TapBoom — player identity, profile and badges.
 //
-// No sign-in, no email, no personal data. Every player is auto-assigned a
+// The guest identity needs no sign-in, email or personal data (on lucidlux.fyi a
+// player may also sign in; see the accounts section). Every player is auto-assigned a
 // random opaque id plus a human-facing handle: an adjective-noun call sign and a
 // sequential number claimed from a shared counter (or a local one offline).
 // The handle is what appears on leaderboards; the id is what addresses rows.
@@ -7940,6 +8082,13 @@ function syncAcctChrome() {
       btn.classList.add('primary');
     }
   }
+  const si = $('btnSignIn');
+  if (si) {
+    si.hidden = !acct || !!acct.player || acct.under13;
+    const b = si.querySelector('b'), i = si.querySelector('i');
+    if (b) b.textContent = acct && acct.signedIn ? 'Finish signing in' : 'Sign in';
+    if (i) i.textContent = 'Keep your level and badges on every device';
+  }
   const rs = $('btnRsSave'), dr = $('btnDrSave');
   if (rs) rs.hidden = !acctNudgeVisible();
   if (dr) dr.hidden = !acctNudgeVisible();
@@ -8881,6 +9030,7 @@ $('btnHofBack').addEventListener('click', () => showScreen('menu'));
 $('btnProfBack').addEventListener('click', () => showScreen('menu'));
 $('btnShopBack').addEventListener('click', () => showScreen('menu'));
 $('btnAccount').addEventListener('click', openAccount);
+$('btnSignIn').addEventListener('click', openAccount);
 $('btnRsSave').addEventListener('click', openAccount);
 $('btnDrSave').addEventListener('click', openAccount);
 $('btnDrRetry').addEventListener('click', startDaily);

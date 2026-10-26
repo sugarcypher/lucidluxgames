@@ -9,6 +9,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <script src="../shop.js"></script>
+<script src="../account/lucidlux-account.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <style>
   /* Identity: a machined instrument. Three sources, one object —
@@ -336,7 +337,7 @@ let toastT=null;
 function say(m,hot){ S.log.unshift({t:S.t.toFixed(1),m}); if(S.log.length>10) S.log.length=10; $('tickMsg').textContent=m; $('tick').classList.toggle('hot',!!hot); $('log').innerHTML=S.log.map(l=>`<div><span class="t">${l.t}s</span> ${l.m}</div>`).join(''); }
 function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),1600); }
 
-function loadLevel(i){ if(locked(i)){ gateShow(); return; } const lv=LEVELS[i]; $('overlay').classList.remove('show'); if(lv.fold){ SOL=SOLIDS[lv.fold]; const f=SOL.faces[lv.coreFace]; FOLD_CORE={face:lv.coreFace,x:f.cen[0],y:f.cen[1],r:28}; S.cam={yaw:0.6,pitch:-0.45}; }
+function loadLevel(i){ if(locked(i)){ gateShow(); return; } window.__llStart=Date.now(); const lv=LEVELS[i]; $('overlay').classList.remove('show'); if(lv.fold){ SOL=SOLIDS[lv.fold]; const f=SOL.faces[lv.coreFace]; FOLD_CORE={face:lv.coreFace,x:f.cen[0],y:f.cen[1],r:28}; S.cam={yaw:0.6,pitch:-0.45}; }
   lv.emit.forEach(em=>{ em._k=0; if(em.at){ const f=SOL.faces[em.face]; em.x=f.cen[0]+em.at[0]; em.y=f.cen[1]+em.at[1]; } });
   Object.assign(S,{lvl:i,pieces:[],ents:[],t:0,phase:'plan',core:100,budget:lv.budget,diss:0,fed:0,spawned:0,sel:null,fold:!!lv.fold,paused:false,log:[],role:lv.roles[0],shape:3}); seed=17+i*101;
   $('lvlName').innerHTML=`${lv.name}<small>round ${lv.num} of ${LEVELS.length}</small>`;
@@ -384,7 +385,13 @@ const FREE=4;
 const locked=i=>i>=FREE&&!LL.ok();
 LL.mount({ gate:$('gate'), onUnlock:()=>{ setTimeout(()=>{ LL.hide(); loadLevel(FREE); },900); }, onBack:()=>{ LL.hide(); loadLevel(0); }, onShow:()=>$('overlay').classList.remove('show') });
 const gateShow=()=>LL.show(); const verifyKey=t=>LL.verify(t);
-function finish(won){ S.phase='done'; $('bStart').disabled=true; ui(); const ov=$('overlay'); ov.classList.add('show'); const last=S.lvl>=LEVELS.length-1;
+function finish(won){
+  // Lucid Lux account: remember the best round held on this device and report the result.
+  try { const b=JSON.parse(localStorage.getItem('resonant_best')||'null')||{round:0,integrity:0};
+    if(won&&(S.lvl+1>b.round||(S.lvl+1===b.round&&S.core>b.integrity))) localStorage.setItem('resonant_best',JSON.stringify({round:S.lvl+1,integrity:S.core}));
+    window.dispatchEvent(new CustomEvent('lucidlux:result',{detail:{kind:'round',level:S.lvl+1,score:Math.max(0,Math.min(100,Math.round(S.core))),durationMs:Date.now()-(window.__llStart||Date.now()),won:!!won}}));
+  } catch(e) {}
+  S.phase='done'; $('bStart').disabled=true; ui(); const ov=$('overlay'); ov.classList.add('show'); const last=S.lvl>=LEVELS.length-1;
   if(won){ $('ovTitle').innerHTML=last?'The solid <em>held.</em>':'Core <em>held.</em>'; $('ovText').textContent=last?`Integrity ${S.core}. Nine rounds, nine parameters: reflection, restitution, permeability, folding, fields, dispersion, defect, duality, and why five.`:`Integrity ${S.core}. Next: ${LEVELS[S.lvl+1].name}.`; $('ovBtn').textContent=last?'Play again':(locked(S.lvl+1)?'The solids →':'Next round'); $('ovBtn').onclick=()=>{ const n=last?0:S.lvl+1; locked(n)?gateShow():loadLevel(n); }; }
   else if(S.core>0){ const miss=L().objectives.filter(o=>!o.test(S)).map(o=>o.label).join(', '); $('ovTitle').innerHTML='Core held, <em>target missed.</em>'; $('ovText').textContent=`Integrity ${S.core}. Short on: ${miss}. Same seed, same stream: change the geometry.`; $('ovBtn').textContent='Retry with my pieces'; $('ovBtn').onclick=()=>{ const keep=S.pieces; loadLevel(S.lvl); S.pieces=keep; S.budget=L().budget-keep.reduce((s,p)=>s+COST[p.n],0); ui(); }; }
   else { $('ovTitle').innerHTML='Core <em>lost.</em>'; $('ovText').textContent=`Integrity ${S.core}. Same seed, same sparks: change the geometry.`; $('ovBtn').textContent='Retry with my pieces'; $('ovBtn').onclick=()=>{ const keep=S.pieces; loadLevel(S.lvl); S.pieces=keep; S.budget=L().budget-keep.reduce((s,p)=>s+COST[p.n],0); ui(); }; } }
@@ -525,5 +532,8 @@ LL.init().then(()=>{ if(LL.justPaid&&LL.ok()){ LL.show(); LL.say('Unlocked. Your
 })();
 </script>
 
+<script>LucidLuxAccount.attach({ game: 'resonant', keys: ['resonant_best'], version: 'resonant',
+  progress: function (st) { var b = st && st.keys && st.keys.resonant_best; return b ? b.round * 1000 + b.integrity : 0; },
+  button: { dark: true, compact: true, position: 'left-middle' } });</script>
 </body>
 </html>

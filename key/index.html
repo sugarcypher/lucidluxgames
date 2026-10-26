@@ -8,6 +8,7 @@
 <meta name="theme-color" content="#0E0D12">
 <link rel="icon" type="image/png" sizes="32x32" href="../favicon-32.png">
 <script src="../shop.js"></script>
+<script src="../account/lucidlux-account.js"></script>
 <style>
 :root { --bg: #0E0D12; --panel: #17161D; --line: #2A2833; --ink: #F3F1F7; --soft: #A9A5B5; --accent: #FF5A4E; --cyan: #6cf3ff; --red: #ff5a3c; }
 * { box-sizing: border-box; }
@@ -35,7 +36,7 @@ footer { margin-top: 40px; color: var(--soft); font-size: 13px; text-align: cent
 <body>
 <main>
   <h1><a href="../">Lucid Lux</a> key</h1>
-  <p class="tag">One key, every game on this site, any device. No account: the key is yours to keep and paste.</p>
+  <p class="tag">One key, every game on this site, any device. The key is yours to keep and paste.</p>
   <div class="gate show" id="gate">
     <div class="pl">
       <p><b>What it unlocks:</b> the paid half of Resonant (rounds V–IX) and the paid parts of any game that comes after. The first rounds of every game stay free.</p>
@@ -55,5 +56,6 @@ footer { margin-top: 40px; color: var(--soft); font-size: 13px; text-align: cent
 LL.mount({ gate: document.getElementById('gate'), onUnlock: () => LL.say('This key verifies. It is saved in this browser; copy it from the box to use elsewhere.'), onBack: () => location.href = '../' });
 LL.init().then(ok => { if (!LL.on()) { document.getElementById('off').style.display = 'block'; } else if (LL.justPaid) { LL.say(ok ? 'Unlocked. Your key is under "I have a key": copy it to use on another device.' : 'Payment seen but the key did not verify. Paste a key or try again.', !ok); } else if (ok) { LL.say('A valid key is saved in this browser.'); } });
 </script>
+<script>LucidLuxAccount.attach({ game: null, button: { dark: true, position: 'top-right' } });</script>
 </body>
 </html>
