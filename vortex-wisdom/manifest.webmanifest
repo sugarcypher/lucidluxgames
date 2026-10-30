@@ -1,0 +1,17 @@
+{
+  "name": "Vortex Wisdom",
+  "short_name": "Vortex",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "portrait",
+  "background_color": "#07040f",
+  "theme_color": "#07040f",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
