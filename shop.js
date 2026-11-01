@@ -3,7 +3,7 @@
 // Turn the shop on by filling SHOP.pay (Stripe Payment Link) and SHOP.api (worker origin, no trailing slash); both empty = everything free.
 // A key is base64url(payload).base64url(Ed25519 signature), minted by the worker after a paid checkout and verified here with /pubkey.
 window.LL=(()=>{
-  const SHOP={ pay:'', api:'' };
+  const SHOP={ pay:'https://buy.stripe.com/eVqdR99QZ9Sn2jX7vKcEw0f', api:'https://lucidlux-shop.13531nxt.workers.dev' };
   const K={ tok:null, pub:null, ok:false, age:null };
   const b64u={ enc:b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''), dec:s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0)) };
   const on=()=>!!(SHOP.pay&&SHOP.api)&&location.hostname==='lucidlux.fyi';

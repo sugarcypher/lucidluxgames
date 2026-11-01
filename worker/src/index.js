@@ -3,6 +3,7 @@
 //   GET  /unlock?session=cs_… → { token } | { error }   verifies the Stripe Checkout Session, mints a signed key
 //   POST /age { age }       → { ok }             counts a bracket: u13 | 13-17 | 18+   (no identity, no cookies, no IP kept)
 //   GET  /age?key=ADMIN_KEY → { u13, "13-17", "18+" }
+//   GET  /mint?key=ADMIN_KEY → { token }          a free key to give away
 // A key is  base64url(payload) "." base64url(signature)  with payload {"k":"lucidlux","v":1,"iat":<unix s>,"ref":<8 hex of the session id hash>}.
 // The game verifies the signature client-side with /pubkey, so a key cannot be forged; it can be shared, which is the intended "every device" behaviour.
 const ORIGIN = 'https://lucidlux.fyi';
@@ -38,6 +39,12 @@ export default {
       const paid = s.status === 'complete' && (s.payment_status === 'paid' || s.payment_status === 'no_payment_required');
       if (!paid) return json({ error: 'not paid' }, 402);
       return json({ token: await mint(env, id) });
+    }
+
+    // Free keys for the owner, reviewers and friends: GET /mint?key=ADMIN_KEY → { token }. Pay-what-you-like links cannot take promotion codes.
+    if (url.pathname === '/mint' && req.method === 'GET') {
+      if (!env.ADMIN_KEY || url.searchParams.get('key') !== env.ADMIN_KEY) return json({ error: 'no' }, 403);
+      return json({ token: await mint(env, 'gift_' + crypto.randomUUID()) });
     }
 
     if (url.pathname === '/age' && req.method === 'POST') {

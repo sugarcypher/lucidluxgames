@@ -23,6 +23,10 @@ Mints the game key after a paid Stripe checkout and counts age brackets. No acco
 ## Adding a game to the key
 Load `../shop.js`, copy the gate markup from `resonant/index.html` (the `.gate` block), call `LL.mount({gate, onUnlock, onBack})` and `LL.init()`, and check `LL.ok()` wherever the paid part begins. The same key unlocks it.
 
+## Free keys
+Pay-what-you-like Payment Links cannot take promotion codes, so free keys come from the worker: open
+`https://lucidlux-shop.13531nxt.workers.dev/mint?key=<ADMIN_KEY>` and paste the token into any game's "I have a key" box, or send it to someone.
+
 ## Reading the age counts
 `https://lucidlux-shop.<account>.workers.dev/age?key=<ADMIN_KEY>` → `{"u13":n,"13-17":n,"18+":n}`
 
