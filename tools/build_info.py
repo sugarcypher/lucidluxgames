@@ -19,7 +19,7 @@ GAMES = [
   summary='Pop the shapes and colours the panel allows. When the screen goes dark, the rule flips. Easy to start, hard to master, for every age.',
   details=[('Status','Released · version 1.4.1'),('Platforms','Browser on phone, tablet or computer · installs to your home screen · plays offline'),
    ('Genre','Reflex, attention, colour and shape'),('Players','1 · plus a shared Daily Challenge leaderboard'),
-   ('Session','Rounds of under a minute; a two-minute lesson'),('Price','Free to level 10 · the Lucid Lux key opens level 11 and up · Daily Challenge always free · no ads'),('Accounts','Optional sign-in keeps your level and badges'),
+   ('Session','Rounds of under a minute; a two-minute lesson'),('Price','Free to level 10 · the Lucid Lux key ($5 a month) opens level 11 and up · Daily Challenge always free · no ads'),('Accounts','Optional sign-in keeps your level and badges'),
    ('Made with','HTML canvas and JavaScript'),('Author',AUTHOR)],
   body='''
 <h2>About</h2>
@@ -60,7 +60,7 @@ GAMES = [
   play='../../resonant/', play_label='Play Resonant', shots=2, wide=False,
   summary='Route sparks away from a living core with reflectors, dampers, gates and prisms, then play the same rules across folded solids.',
   details=[('Status','Released'),('Platforms','Browser on phone, tablet or computer · installs to your home screen'),
-   ('Genre','Physics puzzle, geometry'),('Players','1'),('Length','Nine rounds'),('Price','Rounds I–IV free · the Lucid Lux key opens V–IX · no ads'),
+   ('Genre','Physics puzzle, geometry'),('Players','1'),('Length','Nine rounds'),('Price','Rounds I–IV free · the Lucid Lux key ($5 a month) opens V–IX · no ads'),
    ('Accounts','Optional sign-in'),('Orientation','Best in portrait'),('Made with','HTML canvas and JavaScript'),('Author',AUTHOR)],
   body='''
 <h2>About</h2>
@@ -96,7 +96,7 @@ GAMES = [
   play='../../batduko/', play_label='Play Batduko', shots=2, wide=False,
   summary='Fill a 6×6 grid with bat species and colony sizes. Three caves, from warm-up to champion.',
   details=[('Status','Released'),('Platforms','Browser on phone, tablet or computer'),('Genre','Logic puzzle'),
-   ('Players','1'),('Difficulty','Three caves: Roost, Twilight, Midnight'),('Price','Roost and Twilight free · the Lucid Lux key opens Midnight · no ads'),
+   ('Players','1'),('Difficulty','Three caves: Roost, Twilight, Midnight'),('Price','Roost and Twilight free · the Lucid Lux key ($5 a month) opens Midnight · no ads'),
    ('Accounts','Optional sign-in'),('Input','Touch and mouse'),('Author',AUTHOR)],
   body='''
 <h2>About</h2>
@@ -245,7 +245,7 @@ def page(g):
     rows = '\n'.join(f'<tr><th scope="row">{E(k)}</th><td>{E(v)}</td></tr>' for k, v in g['details'])
     install = '' if g.get('soon') or g.get('external') else '<p class="note">On iPhone: Share → Add to Home Screen. On Android: menu → Install app.</p>'
     if g['slug'] in ('tapboom', 'resonant', 'batduko'):
-        install += '<p class="note">One <a href="../../key/">Lucid Lux key</a>, pay what you like from $3, unlocks the later parts of every game.</p>'
+        install += '<p class="note">One <a href="../../key/">Lucid Lux key</a>, $5 a month, unlocks the later parts of every game. Cancel anytime.</p>'
     ld = {"@context": "https://schema.org", "@type": "VideoGame", "name": name, "url": f"{SITE}/info/{slug}/",
           "description": g['summary'], "author": {"@type": "Person", "name": "Briar Greenway"},
           "publisher": {"@type": "Organization", "name": "Lucid Lux"}, "gamePlatform": "Web browser",

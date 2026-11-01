@@ -16,7 +16,7 @@ p, li { color: #CFCBD9; } a { color: #F3F1F7; } li { margin: 4px 0; }
 <main>
   <h1>Privacy</h1>
   <p>Last updated October 31, 2026.</p>
-  <p>Every game on this site is free to start, shows no ads, and works without an account. A one-time key unlocks the later parts of some games. An account is optional. It lets you keep your progress, play on more than one device, earn badges and appear on the shared boards.</p>
+  <p>Every game on this site is free to start, shows no ads, and works without an account. A $5 monthly key subscription unlocks the later parts of some games. An account is optional. It lets you keep your progress, play on more than one device, earn badges and appear on the shared boards.</p>
 
   <h2>Playing as a guest</h2>
   <ul>
@@ -37,9 +37,11 @@ p, li { color: #CFCBD9; } a { color: #F3F1F7; } li { margin: 4px 0; }
   <p><b>What other players see:</b> your player name, number and avatar, and your scores, accuracy and chain on the boards. Nothing else.</p>
   <p><b>What we never do:</b> sell or share your data, show ads, track you across other sites, or run analytics on you.</p>
 
-  <h2>Buying a key</h2>
-  <p>Payment happens on Stripe's checkout page, not on this site. Stripe handles your card and the email address you give it under <a href="https://stripe.com/privacy" rel="noopener">its own privacy policy</a>; we never see your card number. After you pay, our key service asks Stripe one thing, whether that checkout was paid, and then hands your browser a signed key. The key holds only the date it was made and a short reference to the checkout. It is saved in your browser; it is not tied to your account or your email.</p>
-  <p>Before the button works you choose an age range. It is added to an anonymous tally of three numbers (under 13, 13 to 17, 18 and older) and is not stored with you or your key. Under 13, the button stays off: ask an adult to buy the key.</p>
+  <h2>Subscribing to the key</h2>
+  <p>The Lucid Lux key is a subscription: $5 a month, charged by Stripe until you cancel. Payment happens on Stripe's checkout page, not on this site. Stripe handles your card and the email address you give it under <a href="https://stripe.com/privacy" rel="noopener">its own privacy policy</a>; we never see your card number.</p>
+  <p>After you subscribe, our key service asks Stripe whether that checkout was paid and until when the subscription is paid, then hands your browser a signed key. The key holds the date it was made, its paid-through date and the checkout reference it renews from. Every few weeks your browser asks the key service to renew it; the service checks with Stripe that the subscription is still running and nothing else. The key is saved in your browser and is not tied to your game account.</p>
+  <p>Cancel anytime from the "Manage or cancel" link on the key page, which opens Stripe's customer page. When a subscription ends, its key stops working a few days after the last paid-through date.</p>
+  <p>Before the button works you choose an age range. It is added to an anonymous tally of three numbers (under 13, 13 to 17, 18 and older) and is not stored with you or your key. Subscribing is for adults: under 18, the button stays off and asks you to have a parent or guardian subscribe.</p>
   <h2>Under 13</h2>
   <p>Accounts are for players 13 and older. If you tell us you are under 13, we do not ask for an email address, and you keep playing as a guest with everything saved on your device.</p>
 
