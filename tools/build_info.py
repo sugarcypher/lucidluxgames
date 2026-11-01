@@ -158,7 +158,7 @@ GAMES = [
   summary='Abstract strategy on a torus: the board has no edges, so every line wraps round and meets itself.',
   extra_links=[('Sches on itch.io','https://axisoffun.itch.io/sches')],
   details=[('Status','Released'),('Plays at','toroid.fyi/play'),('Platforms','Browser on a computer'),
-   ('Genre','Abstract strategy'),('Players','Two to six seats · solo against the computer · online two-player'),
+   ('Genre','Abstract strategy'),('Players','Up to six on one computer · solo against the computer · online play coming'),
    ('Price','Free'),('Age','13 and older; terms shown before play'),('Made with','Three.js and WebGL'),
    ('Author','Briar M. Greenway, ThinkWell Labs · coded by Claude')],
   body='''
@@ -192,7 +192,7 @@ GAMES = [
 </ul>
 
 <h2>Ways to play</h2>
-<p><b>Solo</b> against the computer, <b>Sandbox</b> to study the board with nothing hidden, or <b>Online</b>. New to it? Open the <b>Story</b> in the game: it teaches Sches starting from chess.</p>
+<p>Up to six players share one computer, each plotting in private. Play <b>Solo</b> against the computer, or open the <b>Sandbox</b> to study the board with nothing hidden. Online play is coming but is not working yet. New to it? Open the <b>Story</b> in the game: it teaches Sches starting from chess.</p>
 <p class="fine">Sches is hosted at toroid.fyi. You agree to its terms on first play there.</p>
 '''),
 
