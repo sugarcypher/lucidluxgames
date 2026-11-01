@@ -29,6 +29,8 @@ h1 a { color: inherit; text-decoration: none; }
 .gate textarea { width: 100%; height: 84px; margin-top: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; color: var(--ink); font: 13px ui-monospace, Menlo, monospace; padding: 10px; resize: none; }
 .gate .row { display: flex; justify-content: space-between; margin-top: 14px; }
 .gate .row button { background: none; border: 0; color: var(--soft); font: 600 14px inherit; cursor: pointer; padding: 6px 0; }
+.unl { margin: 0 0 12px; padding-left: 20px; color: var(--soft); font-size: 16px; } .unl b { color: var(--ink); }
+.back { display: none; margin-top: 12px; } .back a { color: var(--cyan); font-weight: 700; }
 .off { margin-top: 18px; padding: 14px 16px; border: 1px dashed var(--line); border-radius: 16px; color: var(--soft); font-size: 15px; }
 footer { margin-top: 40px; color: var(--soft); font-size: 13px; text-align: center; } footer a { color: var(--soft); }
 </style>
@@ -39,13 +41,22 @@ footer { margin-top: 40px; color: var(--soft); font-size: 13px; text-align: cent
   <p class="tag">One key, every game on this site, any device. The key is yours to keep and paste.</p>
   <div class="gate show" id="gate">
     <div class="pl">
-      <p><b>What it unlocks:</b> the paid half of Resonant (rounds V–IX) and the paid parts of any game that comes after. The first rounds of every game stay free.</p>
-      <p>Pay what you like above the floor, by card, Apple Pay or stablecoin.</p>
+      <p><b>What it unlocks, for good:</b></p>
+      <ul class="unl">
+        <li><b>TapBoom</b> · levels 11 and up</li>
+        <li><b>Resonant</b> · rounds V–IX</li>
+        <li><b>Batduko</b> · the Midnight cave</li>
+        <li><b>Vortex Wisdom</b> · depths beyond 3</li>
+        <li>and the paid parts of every Lucid Lux game that comes after</li>
+      </ul>
+      <p>Everything before those points stays free, and so do Sches and every Daily Challenge.</p>
+      <p>Pay what you like from $3, once. Card or Apple Pay, through Stripe. One key works on every device: paste it in.</p>
       <div class="q">How old are you? (counted, never stored with you)</div>
       <div class="ages"><button data-age="u13" aria-pressed="false">Under 13</button><button data-age="13-17" aria-pressed="false">13 – 17</button><button data-age="18+" aria-pressed="false">18 +</button></div>
       <a class="pay" data-pay aria-disabled="true" href="#" rel="noopener">Get the key</a>
       <div class="msg"></div>
       <div class="keybox" style="display:none"><textarea placeholder="Paste your key" spellcheck="false"></textarea><button class="pay" data-go style="margin-top:8px;height:44px">Check this key</button></div>
+      <div class="back" id="back"></div>
       <div class="row"><button data-have>I have a key</button><button data-back>Back to the games</button></div>
     </div>
   </div>
@@ -54,7 +65,9 @@ footer { margin-top: 40px; color: var(--soft); font-size: 13px; text-align: cent
 </main>
 <script>
 LL.mount({ gate: document.getElementById('gate'), onUnlock: () => LL.say('This key verifies. It is saved in this browser; copy it from the box to use elsewhere.'), onBack: () => location.href = '../' });
-LL.init().then(ok => { if (!LL.on()) { document.getElementById('off').style.display = 'block'; } else if (LL.justPaid) { LL.say(ok ? 'Unlocked. Your key is under "I have a key": copy it to use on another device.' : 'Payment seen but the key did not verify. Paste a key or try again.', !ok); } else if (ok) { LL.say('A valid key is saved in this browser.'); } });
+const GAMES = { '/tapboom/': 'TapBoom', '/resonant/': 'Resonant', '/batduko/': 'Batduko', '/vortex-wisdom/': 'Vortex Wisdom' };
+function backLink() { let r = null; try { r = localStorage.getItem('ll_return'); } catch (_) {} const name = r && GAMES[r]; if (!name) return; const b = document.getElementById('back'); b.innerHTML = '<a href="' + r + '">Back to ' + name + ' →</a>'; b.style.display = 'block'; }
+LL.init().then(ok => { if (!LL.on()) { document.getElementById('off').style.display = 'block'; } else if (LL.justPaid) { LL.say(ok ? 'Unlocked. Your key is under "I have a key": copy it to use on another device.' : 'Payment seen but the key did not verify. Paste a key or try again.', !ok); if (ok) backLink(); } else if (ok) { LL.say('A valid key is saved in this browser.'); } });
 </script>
 <script>LucidLuxAccount.attach({ game: null, button: { dark: true, position: 'top-right' } });</script>
 </body>

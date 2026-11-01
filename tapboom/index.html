@@ -1655,6 +1655,7 @@ body.dark .tickets { color: #9BC8F0; }
   </section>
 
 </div>
+<script src="../shop.js"></script>
 <script>
 (function () {
 "use strict";
@@ -7957,6 +7958,16 @@ applyScheme((SCHEMES[wallet.equipped.scheme] || SCHEMES.classic).colors);
 kit.setPacks(wallet.equipped);
 
 const game = new Game(el.board, kit, settings);
+// Lucid Lux key: levels 11 and up need it once the shop is on (see /shop.js). Backing out returns to the menu.
+const llGate = window.LL && LL.gate ? LL.gate({ what: 'levels 11 and up', back: 'Back to the menu' }) : null;
+if (llGate) {
+  const beginLevelFree = game.beginLevel.bind(game);
+  game.beginLevel = function (idx) {
+    const r = beginLevelFree(idx);
+    if (idx >= 10 && llGate.locked()) llGate.check().then(function (ok) { if (!ok) location.reload(); });
+    return r;
+  };
+}
 const party = new Celebration(el.fx);
 party.reduceMotion = !!settings.reduceMotion;
 

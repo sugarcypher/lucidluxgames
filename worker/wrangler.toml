@@ -7,7 +7,7 @@ compatibility_date = "2026-09-01"
 # Create once with:  npx wrangler kv namespace create AGES   → paste the id below
 [[kv_namespaces]]
 binding = "AGES"
-id = "REPLACE_WITH_KV_ID"
+id = "2a9cae861bcf4a15b2aea99d75180ae6"
 
 # Secrets (never in this file). Set each with:  npx wrangler secret put <NAME>
 #   STRIPE_KEY  restricted key, Checkout Sessions: read   (Dashboard → Developers → API keys → Create restricted key)

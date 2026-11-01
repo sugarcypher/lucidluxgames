@@ -24,6 +24,12 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
   window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
 }
 </script>"""
+# The Lucid Lux key: shop.js before the game, and a level-11 gate on game.beginLevel (see /shop.js).
+GATE_ANCHOR = 'const game = new Game(el.board, kit, settings);\n'
+GATE_HOOK = (root / 'tools' / 'tapboom-gate.js').read_text()
+assert body.count(GATE_ANCHOR) == 1, 'gate anchor not found in master'
+body = body.replace(GATE_ANCHOR, GATE_ANCHOR + GATE_HOOK)
+body = body.replace('<script>\n(function () {\n"use strict";\n// ---- config.js', '<script src="../shop.js"></script>\n<script>\n(function () {\n"use strict";\n// ---- config.js', 1)
 page = head + '\n<script>\n' + account + '\n</script>\n' + body + '\n\n' + sw_reg + '\n</body>\n</html>\n'
 (root / 'tapboom' / 'index.html').write_text(page)
 
