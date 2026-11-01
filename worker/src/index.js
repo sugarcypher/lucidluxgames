@@ -27,7 +27,7 @@ async function mint(env, sessionId) {
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
-    if (req.method === 'OPTIONS') return json({}, 204);
+    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: json({}).headers });   // a 204 may not carry a body
     if (url.pathname === '/pubkey') return json({ pub: await publicRaw(env) });
 
     if (url.pathname === '/unlock') {
