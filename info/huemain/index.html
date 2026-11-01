@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HueMain · Lucid Lux</title>
+<meta name="description" content="A colour game from Lucid Lux. Coming soon.">
+<meta name="theme-color" content="#0E0D12">
+<link rel="canonical" href="https://lucidlux.fyi/info/huemain/">
+<link rel="icon" type="image/png" sizes="32x32" href="../../favicon-32.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Lucid Lux">
+<meta property="og:title" content="HueMain">
+<meta property="og:description" content="A colour game from Lucid Lux. Coming soon.">
+<meta property="og:url" content="https://lucidlux.fyi/info/huemain/">
+<meta property="og:image" content="https://lucidlux.fyi/huemain-icon.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="../info.css">
+<style>:root { --tint: #C9A227; }</style>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "VideoGame", "name": "HueMain", "url": "https://lucidlux.fyi/info/huemain/", "description": "A colour game from Lucid Lux. Coming soon.", "author": {"@type": "Person", "name": "Briar Greenway"}, "publisher": {"@type": "Organization", "name": "Lucid Lux"}, "gamePlatform": "Web browser", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}}</script>
+</head>
+<body>
+<header class="bar"><div class="wrap"><a class="home" href="../../">Lucid Lux</a><span class="crumb">/ HueMain</span></div></header>
+
+<section class="hero">
+  <div class="hero-bg" style="background-image:url('../../huemain-icon.png')"></div>
+  <div class="wrap hero-in">
+    <img class="icon" src="../../huemain-icon.png" alt="HueMain icon: a ring of every hue around a white centre">
+    <div>
+      <h1>HueMain</h1>
+      <p class="tagline">A colour game from the same house.</p>
+      <div class="actions"><span class="pill">Coming soon</span></div>
+    </div>
+  </div>
+</section>
+
+
+
+<main class="wrap cols">
+  <article class="desc">
+<h2>About</h2>
+<p class="lead">HueMain is a colour game from Lucid Lux. It is not playable yet.</p>
+<p>Sign in on any Lucid Lux page and your account will carry over to HueMain when it opens. Until then, the other games are below.</p>
+  </article>
+  <aside class="side">
+    <div class="card">
+      
+      
+    </div>
+    <div class="card">
+      <h2>Details</h2>
+      <table class="info">
+<tr><th scope="row">Status</th><td>In development</td></tr>
+<tr><th scope="row">Genre</th><td>Colour</td></tr>
+<tr><th scope="row">Price</th><td>Free</td></tr>
+<tr><th scope="row">Author</th><td>Briar Greenway, ThinkWell Labs</td></tr>
+      </table>
+    </div>
+  </aside>
+</main>
+
+<section class="wrap more">
+  <h2>More from Lucid Lux</h2>
+  <div class="more-grid">
+<a href="../tapboom/"><img src="../../tapboom-icon.png" alt="" loading="lazy"><span>TapBoom</span><small>About</small></a>
+<a href="../resonant/"><img src="../../resonant-icon.png" alt="" loading="lazy"><span>Resonant</span><small>About</small></a>
+<a href="../batduko/"><img src="../../batduko-icon.svg" alt="" loading="lazy"><span>Batduko</span><small>About</small></a>
+<a href="../vortex-wisdom/"><img src="../../vortex-wisdom/icon-512.png" alt="" loading="lazy"><span>Vortex Wisdom</span><small>About</small></a>
+<a href="../sches/"><img src="../../sches-icon.png" alt="" loading="lazy"><span>Sches</span><small>About</small></a>
+  </div>
+</section>
+
+<footer><div class="wrap"><a href="../../">All games</a> · <a href="../../key/">Key</a> · <a href="../../privacy.html">Privacy</a></div></footer>
+
+<dialog class="lb" id="lb"><button type="button" aria-label="Close">✕</button><img alt=""></dialog>
+<script>
+(function () {
+  var lb = document.getElementById('lb'); if (!lb || !lb.showModal) return;
+  var im = lb.querySelector('img');
+  document.querySelectorAll('.gallery button').forEach(function (b) {
+    b.addEventListener('click', function () { im.src = b.dataset.full; im.alt = b.querySelector('img').alt; lb.showModal(); });
+  });
+  lb.addEventListener('click', function () { lb.close(); });
+})();
+</script>
+<script src="../../account/lucidlux-account.js"></script>
+<script>LucidLuxAccount.attach({ game: null, button: { dark: true, position: 'top-right' } });</script>
+</body>
+</html>
