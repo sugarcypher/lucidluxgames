@@ -23,9 +23,11 @@
     <meta property="og:image:alt" content="A glowing magenta and teal vortex tunnel with warm lights leading into it, under the title Vortex Wisdom" />
     <meta name="twitter:card" content="summary_large_image" />
     <title>Vortex Wisdom</title>
-    <!-- Lucid Lux key: depths beyond 3 need it once the shop is on (see /shop.js). -->
+    <!-- Lucid Lux key: OFF while Vortex Wisdom is in a game contest; every depth is free.
+         To turn it on after the contest, restore the line below (the bundle already checks window.LLGate at depth 4):
+         <script>window.LLGate = window.LL && LL.gate ? LL.gate({ what: 'depths beyond 3', back: 'End this drift' }) : null;</script> -->
     <script src="../shop.js"></script>
-    <script>window.LLGate = window.LL && LL.gate ? LL.gate({ what: 'depths beyond 3', back: 'End this drift' }) : null;</script>
+    <script>window.LLGate = null;</script>
     <script type="module" crossorigin src="./assets/index-Dj6ZRcY1.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-MIJVz5r5.css">
   </head>
