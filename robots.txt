@@ -1,0 +1,13 @@
+# Meta's and OpenAI's crawlers are turned away; every other crawler is welcome.
+User-agent: GPTBot
+User-agent: ChatGPT-User
+User-agent: OAI-SearchBot
+User-agent: meta-externalagent
+User-agent: meta-externalfetcher
+User-agent: FacebookBot
+Disallow: /
+
+User-agent: *
+Allow: /
+
+Sitemap: https://lucidlux.fyi/sitemap.xml
